@@ -1,5 +1,5 @@
 /**********************************************************************************************
- * LOGICCARD ENGINE — DESIGN PHILOSOPHY AND PRODUCT VISION
+ * Advanced Timer — DESIGN PHILOSOPHY AND PRODUCT VISION
  *
  * This project is not a traditional timer relay, nor a full PLC.
  * It is a new class of automation controller designed to bridge the gap between
@@ -39,10 +39,10 @@
  * For many users, PLCs are powerful but inaccessible.
  *
  * ============================================================================================
- * 3) CORE IDEA OF THE LOGICCARD ENGINE
+ * 3) CORE IDEA OF THE Advanced Timer
  * ============================================================================================
  *
- * The LogicCard engine introduces a different paradigm:
+ * The Advanced Timer introduces a different paradigm:
  *
  * - System behavior is defined by structured logic units called "LogicCards".
  * - Each LogicCard represents a modular state machine with configurable
@@ -64,7 +64,7 @@
  *   - Timer relays → simple but rigid.
  *   - PLCs        → powerful but complex.
  *
- * The LogicCard engine provides:
+ * The Advanced Timer provides:
  *
  * - PLC-level logical flexibility.
  * - Timer-level simplicity of configuration.
@@ -114,7 +114,7 @@
  * 7) LONG-TERM VISION
  * ============================================================================================
  *
- * The LogicCard engine is designed as a foundational automation kernel that
+ * The Advanced Timer is designed as a foundational automation kernel that
  * can:
  *
  * - Scale from simple timer devices to complex automation controllers.
@@ -763,7 +763,7 @@ void initLogicEngine() {
 void setup() {
   Serial.begin(115200);
   delay(2000);
-  Serial.println("\n--- LogicCard Engine Starting ---");
+  Serial.println("\n--- Advanced Timer Starting ---");
   delay(1000);  // Allow time for Serial to initialize
   initLogicEngine();
 
