@@ -422,6 +422,7 @@ const uint8_t totalCards =
 const uint8_t DI_Pins[NUM_DI] = {13, 12, 14, 27};  // Digital Input pins
 const uint8_t DO_Pins[NUM_DO] = {26, 25, 33, 32};  // Digital Output pins
 const uint8_t AI_Pins[NUM_AI] = {35, 34};          // Analog Input pins
+const uint32_t TICK_MS = 10;
 
 // 1. Define the Master Lists
 #define LIST_CARD_TYPES(X) \
@@ -528,6 +529,8 @@ struct LogicCard {
   logicCombine resetCombine;
 };
 LogicCard logicCards[totalCards];
+
+uint32_t lastTickMs = 0;
 
 // Helper function for enum to string conversion and vice versa (for JSON
 // serialization) utilizing the X-Macro lists
@@ -692,6 +695,68 @@ bool loadConfig() {
   return true;
 }
 
+LogicCard* getCardById(int id) {
+  if (id < 0 || id >= totalCards) return nullptr;
+  return &logicCards[id];
+}
+
+bool evalOperator(const LogicCard& card, logicOperator op, uint32_t threshold) {
+  switch (op) {
+    case Op_AlwaysTrue:
+      return true;
+    case Op_LogicalTrue:
+      return card.logicalState;
+    case Op_LogicalFalse:
+      return !card.logicalState;
+    case Op_PhysicalOn:
+      return card.physicalState;
+    case Op_PhysicalOff:
+      return !card.physicalState;
+    case Op_Triggered:
+      return card.triggerFlag;
+    case Op_TriggerCleared:
+      return !card.triggerFlag;
+    case Op_GT:
+      return card.currentValue > threshold;
+    case Op_LT:
+      return card.currentValue < threshold;
+    case Op_EQ:
+      return card.currentValue == threshold;
+    case Op_NEQ:
+      return card.currentValue != threshold;
+    case Op_GTE:
+      return card.currentValue >= threshold;
+    case Op_LTE:
+      return card.currentValue <= threshold;
+    case Op_Running:
+      return card.state == State_Running;
+    case Op_Finished:
+      return card.state == State_Finished;
+    case Op_Stopped:
+      return card.state == State_Stopped;
+    case Op_None:
+    default:
+      return false;
+  }
+}
+
+bool evalClause(int id, logicOperator op, uint32_t threshold) {
+  if (op == Op_None) return false;
+  LogicCard* src = getCardById(id);
+  if (!src) return false;
+  return evalOperator(*src, op, threshold);
+}
+
+bool evalCondition(int aId, logicOperator aOp, uint32_t aThr, int bId,
+                   logicOperator bOp, uint32_t bThr, logicCombine combine) {
+  bool a = evalClause(aId, aOp, aThr);
+  if (combine == Combine_None) return a;
+  bool b = evalClause(bId, bOp, bThr);
+  if (combine == Combine_AND) return a && b;
+  if (combine == Combine_OR) return a || b;
+  return a;
+}
+
 void initLogicEngine() {
   if (!LittleFS.begin(true)) {
     Serial.println("FS Mount Failed");
@@ -766,6 +831,7 @@ void setup() {
   Serial.println("\n--- Advanced Timer Starting ---");
   delay(1000);  // Allow time for Serial to initialize
   initLogicEngine();
+  lastTickMs = millis();
 
   // Debug: Print loaded configuration
   for (int i = 0; i < totalCards; i++) {
