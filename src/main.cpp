@@ -103,8 +103,8 @@
  * - Logic conditions (set/reset rules referencing other cards).
  * - Runtime signals (logical state, physical state, trigger events).
  *
- * By unifying all functional elements (IO, timers, counters, virtual signals)
- * under the same LogicCard model, the system becomes:
+ * By unifying all functional elements (IO and virtual signals) and embedding
+ * timing/counting into every LogicCard, the system becomes:
  *
  * - Fully configurable through data (JSON).
  * - Observable and debuggable in real time.
@@ -134,8 +134,8 @@
  * LOGIC CARD ENGINE — ARCHITECTURE OVERVIEW
  *
  * This project implements a PLC-like logic engine where every functional unit
- * (Digital IO, Analog IO, Timers, Counters, and Virtual IO) is represented as a
- * unified entity called a "LogicCard".
+ * (Digital IO, Analog IO, and Virtual IO) is represented as a unified entity
+ * called a "LogicCard" with built-in timing/counting.
  *
  * The goal is to create a hardware-agnostic, configurable, persistent, and
  * scalable logic system where behavior is defined by configuration rather than
@@ -156,8 +156,6 @@
  * - DigitalOutput : Physical digital output pins.
  * - AnalogInput   : Physical analog input channels.
  * - SoftIO        : Virtual outputs without hardware pins.
- * - Timer         : Time-based logic units.
- * - Counter       : Event-counting logic units.
  *
  * Each card is identified by:
  * - id    : Global unique identifier (used in logic references).
@@ -187,7 +185,8 @@
  *    - type, mode, constants, settings, logic conditions, allowRetrigger.
  *
  * B) Runtime State (Volatile, reset on boot)
- *    - logicalState, physicalState, triggerFlag, currentValue, state.
+ *    - logicalState, physicalState, triggerFlag, currentValue,
+ *      eventCounter, startOnMs, startOffMs, state.
  *
  * This mirrors real PLC architecture:
  * - Configuration = PLC program (DNA).
@@ -205,8 +204,6 @@
  * - DigitalOutput : Drives physical outputs.
  * - AnalogInput   : Reads analog values.
  * - SoftIO        : Virtual logical outputs.
- * - Timer         : Time-based state machines.
- * - Counter       : Event-based counting units.
  *
  * Behavior impact:
  * - Determines which signals are meaningful.
@@ -248,12 +245,12 @@
  * - State_AutoOff       : Auto-off countdown running.
  * - State_On            : Active state.
  * - State_Ready         : Ready to start.
- * - State_Running       : Timer/Counter active.
- * - State_Finished      : Timer/Counter completed.
- * - State_Stopped       : Timer/Counter stopped.
+ * - State_Running       : Timing/cycle active.
+ * - State_Finished      : Timing/cycle completed.
+ * - State_Stopped       : Timing/cycle stopped.
  * - State_Idle          : Waiting state.
- * - State_Counting      : Counter active.
- * - State_TargetReached : Counter reached target.
+ * - State_Counting      : Counting active.
+ * - State_TargetReached : Count target reached.
  *
  * State defines "where the card currently is".
  *
@@ -280,7 +277,7 @@
  * Numeric comparison operators:
  * - Op_GT, Op_LT, Op_EQ, Op_NEQ, Op_GTE, Op_LTE
  *
- * Process state operators (Timer/Counter):
+ * Process state operators (timing/counting states):
  * - Op_Running
  * - Op_Finished
  * - Op_Stopped
@@ -333,8 +330,11 @@
  *
  * Runtime Value:
  * --------------
- * currentValue : Dynamic numeric value.
- *                Examples: elapsed time, analog reading, counter value.
+ * currentValue  : Dynamic numeric value.
+ *                - AnalogInput: scaled analog reading for comparisons.
+ *                - Other types: event counter value for comparisons.
+ * startOnMs     : Timestamp for on-delay tracking.
+ * startOffMs    : Timestamp for off-delay tracking.
  *
  * Mode & State:
  * -------------
@@ -378,13 +378,8 @@
  * - Behaves like DigitalOutput without hardware.
  * - Used for internal logic routing.
  *
- * Timer:
- * - currentValue represents elapsed time.
- * - state represents timer lifecycle.
- *
- * Counter:
- * - currentValue represents count value.
- * - state represents counting lifecycle.
+ * Note:
+ * - Numeric comparison operators use currentValue.
  *
  * ============================================================================================
  * 5) OVERALL PHILOSOPHY
@@ -413,11 +408,8 @@ const uint8_t NUM_DI = 4;
 const uint8_t NUM_DO = 4;
 const uint8_t NUM_AI = 2;
 const uint8_t NUM_SIO = 4;
-const uint8_t NUM_TIMER = 2;
-const uint8_t NUM_COUNTER = 2;
 
-const uint8_t totalCards =
-    NUM_DI + NUM_DO + NUM_AI + NUM_SIO + NUM_TIMER + NUM_COUNTER;
+const uint8_t totalCards = NUM_DI + NUM_DO + NUM_AI + NUM_SIO;
 
 const uint8_t DI_Pins[NUM_DI] = {13, 12, 14, 27};  // Digital Input pins
 const uint8_t DO_Pins[NUM_DO] = {26, 25, 33, 32};  // Digital Output pins
@@ -429,9 +421,7 @@ const uint32_t TICK_MS = 10;
   X(DigitalInput)          \
   X(DigitalOutput)         \
   X(AnalogInput)           \
-  X(SoftIO)                \
-  X(Timer)                 \
-  X(Counter)
+  X(SoftIO)
 
 #define LIST_OPERATORS(X) \
   X(Op_None)              \
@@ -507,6 +497,8 @@ struct LogicCard {
   uint32_t setting1;
   uint32_t setting2;
   uint32_t currentValue;
+  uint32_t startOnMs;
+  uint32_t startOffMs;
   cardMode mode;
   cardState state;
 
@@ -604,6 +596,8 @@ void serializeCardToJson(const LogicCard& card, JsonObject& json) {
   json["setting1"] = card.setting1;
   json["setting2"] = card.setting2;
   json["currentValue"] = card.currentValue;
+  json["startOnMs"] = card.startOnMs;
+  json["startOffMs"] = card.startOffMs;
   json["mode"] = modeToStr(card.mode);
   json["state"] = stateToStr(card.state);
   json["allowRetrigger"] = card.allowRetrigger;
@@ -638,6 +632,16 @@ void deserializeCardFromJson(JsonObject& json, LogicCard& card) {
   card.setting1 = json["setting1"];
   card.setting2 = json["setting2"];
   card.currentValue = json["currentValue"];
+  if (json["startOnMs"].is<uint32_t>()) {
+    card.startOnMs = json["startOnMs"];
+  } else {
+    card.startOnMs = 0;
+  }
+  if (json["startOffMs"].is<uint32_t>()) {
+    card.startOffMs = json["startOffMs"];
+  } else {
+    card.startOffMs = 0;
+  }
   card.mode = strToMode(json["mode"]);
   card.state = strToState(json["state"]);
   card.allowRetrigger = json["allowRetrigger"];
@@ -779,6 +783,8 @@ void initLogicEngine() {
       logicCards[i].resetCombine = Combine_None;
       logicCards[i].setA_Operator = Op_None;
       logicCards[i].resetA_Operator = Op_None;
+      logicCards[i].startOnMs = 0;
+      logicCards[i].startOffMs = 0;
 
       // --- Hardware Pin Assignment ---
       if (i < NUM_DI) {
@@ -794,19 +800,10 @@ void initLogicEngine() {
         logicCards[i].index = i - (NUM_DI + NUM_DO);
         logicCards[i].hwPin = AI_Pins[logicCards[i].index];
       } else {
-        // SoftIO, Timers, Counters
+        // SoftIO (virtual outputs)
         logicCards[i].hwPin = 255;
-        if (i < NUM_DI + NUM_DO + NUM_AI + NUM_SIO) {
-          logicCards[i].type = SoftIO;
-          logicCards[i].index = i - (NUM_DI + NUM_DO + NUM_AI);
-        } else if (i < NUM_DI + NUM_DO + NUM_AI + NUM_SIO + NUM_TIMER) {
-          logicCards[i].type = Timer;
-          logicCards[i].index = i - (NUM_DI + NUM_DO + NUM_AI + NUM_SIO);
-        } else {
-          logicCards[i].type = Counter;
-          logicCards[i].index =
-              i - (NUM_DI + NUM_DO + NUM_AI + NUM_SIO + NUM_TIMER);
-        }
+        logicCards[i].type = SoftIO;
+        logicCards[i].index = i - (NUM_DI + NUM_DO + NUM_AI);
       }
     }
     saveConfig();
@@ -861,6 +858,10 @@ void setup() {
     Serial.print(logicCards[i].setting2);
     Serial.print(", currentValue: ");
     Serial.print(logicCards[i].currentValue);
+    Serial.print(", startOnMs: ");
+    Serial.print(logicCards[i].startOnMs);
+    Serial.print(", startOffMs: ");
+    Serial.print(logicCards[i].startOffMs);
     Serial.print(", mode: ");
     Serial.print(modeToStr(logicCards[i].mode));
     Serial.print(", state: ");
