@@ -218,8 +218,11 @@
  *
  * Examples:
  * - Mode_None       : No special behavior.
- * - DI_Immediate    : Digital input reacts instantly.
- * - DI_Debounced    : Digital input uses debounce logic.
+ * - DI_Rising       : Digital input event on OFF->ON edge.
+ * - DI_Falling      : Digital input event on ON->OFF edge.
+ * - DI_Change       : Digital input event on either edge.
+ * - DI_Immediate    : Deprecated DI compatibility mode.
+ * - DI_Debounced    : Deprecated DI compatibility mode.
  * - Out_NoDelay     : Output changes immediately.
  * - Out_OnDelay     : Output activates after delay.
  * - Out_AutoOff     : Output turns off automatically after time.
@@ -241,6 +244,7 @@
  * Examples:
  * - State_None          : Undefined / not active.
  * - State_Off           : Inactive state.
+ * - State_Debouncing    : Transition filtering in progress.
  * - State_OnDelay       : Waiting for delay completion.
  * - State_AutoOff       : Auto-off countdown running.
  * - State_On            : Active state.
@@ -307,39 +311,47 @@
  *
  * Constants:
  * ----------
- * constant1 : Calibration or scaling parameter.
- * constant2 : Secondary calibration or offset parameter.
+ * constant1 : DI polarity selector (0 = active high, 1 = active low).
+ *             Other card types may use type-specific meanings.
+ * constant2 : DI unused/reserved in current architecture.
+ *             Other card types may use type-specific meanings.
  *
  * Core Logic Signals:
  * -------------------
- * logicalState  : Logical meaning of the card (true/false).
- * physicalState : Actual hardware or virtual output state.
- * triggerFlag   : One-cycle event flag for edge detection.
+ * physicalState : DI raw signal with polarity applied (non-debounced).
+ * logicalState  : DI debounced state gated by SET condition.
+ * triggerFlag   : DI one-cycle pulse on qualified edge event.
  *
  * Behavior Control:
  * -----------------
- * allowRetrigger : Determines whether repeated triggers are allowed.
+ * allowRetrigger : DI unused/ignored (always re-trigger capable by design).
+ *                  Kept for cross-card schema compatibility.
  *
  * Generic Settings:
  * -----------------
- * setting1 : Primary configuration value.
- *            Examples: delay time, threshold, target count.
+ * setting1 : DI debounce time in milliseconds.
+ *            Other card types may map this to delay/threshold/target.
  *
- * setting2 : Secondary configuration value.
- *            Examples: auto-off time, debounce cycles, smoothing window.
+ * setting2 : DI unused/reserved in current architecture.
+ *            Other card types may map this to secondary settings.
  *
  * Runtime Value:
  * --------------
- * currentValue  : Dynamic numeric value.
- *                - AnalogInput: scaled analog reading for comparisons.
- *                - Other types: event counter value for comparisons.
- * startOnMs     : Timestamp for on-delay tracking.
- * startOffMs    : Timestamp for off-delay tracking.
+ * currentValue  : DI event counter (increments on qualified trigger events).
+ *                AnalogInput may use this for scaled readings.
+ * startOnMs     : DI debounce candidate ON timestamp.
+ * startOffMs    : DI debounce candidate OFF timestamp.
  *
  * Mode & State:
  * -------------
- * mode  : Defines behavior pattern of the card.
- * state : Defines current lifecycle state.
+ * mode  : DI edge mode (DI_Rising/DI_Falling/DI_Change as canonical).
+ * state : DI runtime state (State_Off/State_Debouncing/State_On).
+
+ * DI Unused Variables in this revision:
+ * -------------------------------------
+ * - allowRetrigger (ignored for DI runtime behavior)
+ * - constant2 (reserved for non-DI types/future use)
+ * - setting2 (reserved for non-DI types/future use)
  *
  * Logic Conditions:
  * -----------------
@@ -444,6 +456,9 @@ const uint32_t TICK_MS = 10;
 
 #define LIST_MODES(X) \
   X(Mode_None)        \
+  X(DI_Rising)        \
+  X(DI_Falling)       \
+  X(DI_Change)        \
   X(DI_Immediate)     \
   X(DI_Debounced)     \
   X(Out_NoDelay)      \
@@ -459,6 +474,7 @@ const uint32_t TICK_MS = 10;
 #define LIST_STATES(X) \
   X(State_None)        \
   X(State_Off)         \
+  X(State_Debouncing)  \
   X(State_OnDelay)     \
   X(State_AutoOff)     \
   X(State_On)          \
@@ -488,19 +504,19 @@ struct LogicCard {
   logicCardType type;
   uint8_t index;
   uint8_t hwPin;
-  float constant1;
-  float constant2;
-  bool logicalState;
-  bool physicalState;
-  bool triggerFlag;
-  bool allowRetrigger;
-  uint32_t setting1;
-  uint32_t setting2;
-  uint32_t currentValue;
-  uint32_t startOnMs;
-  uint32_t startOffMs;
-  cardMode mode;
-  cardState state;
+  float constant1;        // DI: polarity selector (0=active high, 1=active low)
+  float constant2;        // DI: unused/reserved
+  bool logicalState;      // DI: debounced state gated by SET condition
+  bool physicalState;     // DI: raw pin state after polarity
+  bool triggerFlag;       // DI: one-cycle qualified edge pulse
+  bool allowRetrigger;    // DI: ignored, kept for schema compatibility
+  uint32_t setting1;      // DI: debounce time (ms)
+  uint32_t setting2;      // DI: unused/reserved
+  uint32_t currentValue;  // DI: event counter
+  uint32_t startOnMs;     // DI: debounce candidate ON timestamp
+  uint32_t startOffMs;    // DI: debounce candidate OFF timestamp
+  cardMode mode;          // DI: canonical edge mode (Rising/Falling/Change)
+  cardState state;        // DI: Off / Debouncing / On
 
   // LogicCondition setCondition;
   int setA_ID;
