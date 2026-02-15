@@ -1,0 +1,552 @@
+/**********************************************************************************************
+ *
+ * ADVANCED TIMER
+ * MASTER ARCHITECTURE & BEHAVIOR SPECIFICATION
+ *
+ * ============================================================================================
+ * 0) PURPOSE OF THIS DOCUMENT
+ * ============================================================================================
+ *
+ * This block comment is the authoritative specification of the Advanced Timer
+ * automation kernel.
+ *
+ * It defines:
+ * • Project rationale
+ * • System positioning
+ * • Architectural principles
+ * • Enum semantics
+ * • Complete LogicCard field definitions
+ * • DigitalInput contract
+ * • DigitalOutput / SoftIO contract
+ * • Condition system behavior
+ *
+ * This document serves as:
+ * - Firmware development baseline
+ * - Configuration portal reference
+ * - Long-term system contract
+ *
+ * If implementation conflicts with this document,
+ * this document is the source of truth.
+ *
+ *
+ * ============================================================================================
+ * 1) PROJECT RATIONALE & POSITIONING
+ * ============================================================================================
+ *
+ * Traditional Timer Relays:
+ * • Fixed manufacturer-defined modes
+ * • No composable logic
+ * • No inter-signal dependency modeling
+ * • Rigid state machines
+ *
+ * Traditional PLC Systems:
+ * • Extremely flexible
+ * • Require programming knowledge
+ * • Require external engineering tools
+ * • Expensive and complex for small systems
+ *
+ * The Advanced Timer exists between these two extremes.
+ *
+ * It delivers:
+ * • PLC-level logical flexibility
+ * • Timer-level configuration simplicity
+ * • Data-driven behavior
+ * • No user programming requirement
+ *
+ * Philosophy:
+ * Behavior is configured, not coded.
+ *
+ *
+ * ============================================================================================
+ * 2) CORE ARCHITECTURAL PRINCIPLES
+ * ============================================================================================
+ *
+ * 2.1 Unified LogicCard Model
+ * --------------------------------------------------------------------------------------------
+ *
+ * Every functional element in the system is represented by a LogicCard.
+ *
+ * Supported card families:
+ *
+ * DigitalInput
+ * DigitalOutput
+ * AnalogInput
+ * SoftIO (virtual output)
+ *
+ * All share:
+ * • Same data schema
+ * • Same persistence model
+ * • Same condition system
+ *
+ *
+ * 2.2 Hardware vs Logic Separation
+ * --------------------------------------------------------------------------------------------
+ *
+ * Logic Layer:
+ * - State machines
+ * - Timing
+ * - Counters
+ * - Condition evaluation
+ *
+ * Hardware Layer:
+ * - GPIO binding
+ * - ADC sampling
+ * - Pin driving
+ *
+ * LogicCards describe behavior, not hardware directly.
+ *
+ *
+ * 2.3 Persistent vs Runtime Model
+ * --------------------------------------------------------------------------------------------
+ *
+ * Persistent (Filesystem JSON):
+ * - type
+ * - mode
+ * - invert
+ * - timing settings (setting1, setting2, setting3)
+ * - set/reset conditions
+ *
+ * Runtime (volatile):
+ * - logicalState
+ * - physicalState
+ * - triggerFlag
+ * - currentValue
+ * - state
+ * - timing registers (startOnMs, startOffMs, repeatCounter)
+ *
+ *
+ * ============================================================================================
+ * 3) ENUM DEFINITIONS & SEMANTICS
+ * ============================================================================================
+ *
+ * 3.1 logicCardType
+ * --------------------------------------------------------------------------------------------
+ *
+ * DigitalInput → Physical digital GPIO input
+ * DigitalOutput → Physical digital GPIO output
+ * AnalogInput → Physical analog input channel
+ * SoftIO → Virtual output-like logic signal
+ *
+ *
+ * 3.2 logicOperator
+ * --------------------------------------------------------------------------------------------
+ *
+ * Op_AlwaysTrue → unconditional clause
+ * Op_None → clause disabled
+ *
+ * Logical Operators:
+ * Op_LogicalTrue
+ * Op_LogicalFalse
+ *
+ * Physical Operators:
+ * Op_PhysicalOn
+ * Op_PhysicalOff
+ *
+ * Trigger Operators:
+ * Op_Triggered
+ * Op_TriggerCleared
+ *
+ * Numeric Operators (compare against currentValue):
+ * Op_GT, Op_LT, Op_EQ, Op_NEQ, Op_GTE, Op_LTE
+ *
+ * Process State Operators:
+ * Op_Running
+ * Op_Finished
+ * Op_Stopped
+ *
+ *
+ * 3.3 cardMode
+ * --------------------------------------------------------------------------------------------
+ *
+ * DI Modes:
+ * DI_Rising
+ * DI_Falling
+ * DI_Change
+ *
+ * DO/SIO Modes:
+ * (polarity now mainly controlled by 'invert' field)
+ * Legacy modes remain for schema compatibility.
+ *
+ *
+ * 3.4 cardState
+ * --------------------------------------------------------------------------------------------
+ *
+ * Generic states retained for compatibility.
+ *
+ * DO/SIO Canonical Phases:
+ *
+ * State_DO_Idle
+ * State_DO_OnDelay
+ * State_DO_OffDelay
+ * State_DO_Finished
+ *
+ *
+ * 3.5 logicCombine
+ * --------------------------------------------------------------------------------------------
+ *
+ * Combine_None → Use clause A only
+ * Combine_AND → A && B
+ * Combine_OR → A || B
+ *
+ *
+ * ============================================================================================
+ * 4) LOGICCARD STRUCT — COMPLETE FIELD SPECIFICATION
+ * ============================================================================================
+ *
+ * Identity & Binding:
+ *
+ * id → Global unique ID
+ * type → logicCardType
+ * index → Position within family
+ * hwPin → Hardware pin (255 for virtual)
+ *
+ *
+ * Configuration:
+ *
+ * invert → bool
+ *          true  = Active Low / inverted polarity
+ *          false = Active High / normal polarity
+ *
+ *
+ * Timing Parameters (all in milliseconds):
+ *
+ * setting1 → DO/SIO: ON delay / pulse-high duration
+ *            DI:     debounce window
+ *
+ * setting2 → DO/SIO: OFF delay / inter-cycle rest
+ *            DI:     reserved
+ *
+ * setting3 → DO/SIO: repeat count
+ *                 0     = infinite
+ *                 1     = one-shot
+ *                 >1    = exactly N full cycles
+ *            DI:     extra parameter / future use (e.g. filter samples, long-press threshold…)
+ *
+ *
+ * Core Runtime Signals:
+ *
+ * logicalState → DI: qualified logical input
+ *                DO/SIO: mission latch (intent to run)
+ *
+ * physicalState → DI: polarity-adjusted / debounced input state
+ *                 DO/SIO: time-shaped effective output truth
+ *
+ * triggerFlag → One-cycle pulse
+ *               DI: edge detection (after debounce/qualify)
+ *               DO/SIO: ignition from setCondition rising edge
+ *
+ *
+ * Timing Registers:
+ *
+ * currentValue → DI: event counter
+ *                DO/SIO: cycle counter (increments on physical rising edge)
+ *
+ * startOnMs → Timestamp when current ON-phase began
+ *
+ * startOffMs → Timestamp when current OFF-phase began
+ *
+ * repeatCounter → DO/SIO: counts completed cycles for repeat logic
+ *
+ *
+ * Mode & State:
+ *
+ * mode → DI: edge / debounce behavior
+ *        DO/SIO: legacy / future mode extensions
+ *
+ * state → DI: filtering lifecycle state
+ *         DO/SIO: phase state (Idle, OnDelay, OffDelay, Finished)
+ *
+ *
+ * SET Group Fields:
+ *
+ * setA_ID
+ * setA_Operator
+ * setA_Threshold
+ *
+ * setB_ID
+ * setB_Operator
+ * setB_Threshold
+ *
+ * setCombine
+ *
+ *
+ * RESET Group Fields:
+ *
+ * resetA_ID
+ * resetA_Operator
+ * resetA_Threshold
+ *
+ * resetB_ID
+ * resetB_Operator
+ * resetB_Threshold
+ *
+ * resetCombine
+ *
+ *
+ * ============================================================================================
+ * 5) CONDITION SYSTEM CONTRACT
+ * ============================================================================================
+ *
+ * SET condition:
+ * Evaluated continuously.
+ * Rising edge generates triggerFlag.
+ *
+ * RESET condition:
+ * Evaluated continuously.
+ * When TRUE:
+ * - Immediate hard stop
+ * - Clear all runtime state (logicalState, counters, timers)
+ * - Inhibit further progression
+ *
+ *
+ * ============================================================================================
+ * 6) DIGITAL INPUT (DI) CONTRACT
+ * ============================================================================================
+ *
+ * SET behavior:
+ * Acts as gated enable.
+ *
+ * DI processing (edge detection, debounce, counter) occurs only when:
+ * setCondition == true
+ *
+ * RESET behavior:
+ * Clears:
+ * - logicalState
+ * - triggerFlag
+ * - currentValue
+ * - timing registers
+ *
+ * Also inhibits DI processing while true.
+ *
+ * Always update physical state (invert adjusted) in all the conditions.
+ *
+ * ============================================================================================
+ * 7) DIGITAL OUTPUT (DO) & SOFTIO CONTRACT
+ * ============================================================================================
+ *
+ * Trigger Model:
+ * setCondition rising edge → triggerFlag (one cycle)
+ * triggerFlag → latch logicalState = true  (non-retriggerable while running)
+ *
+ * Non-Retriggerable:
+ * While logicalState == true, new triggers are ignored.
+ *
+ * Phases per cycle:
+ *
+ * Idle → OnDelay → Active → OffDelay → (repeat or Idle)
+ *
+ * Repeat logic:
+ * - setting3 = 0     → repeat forever until reset
+ * - setting3 = 1     → single cycle then complete
+ * - setting3 = N > 1 → exactly N full cycles then complete
+ *
+ * Mission Completion:
+ *
+ * On final cycle completion:
+ * - logicalState = false
+ * - state = State_DO_Finished
+ * - counter left at final value
+ *
+ * Card becomes re-armable.
+ *
+ * RESET:
+ * - Immediate hard stop
+ * - Clears counter, timers, logicalState
+ * - Forces Idle
+ *
+ *
+ * ============================================================================================
+ * 8) SYSTEM IDENTITY
+ * ============================================================================================
+ *
+ * This system is:
+ *
+ * A configurable automation kernel.
+ * A composable logic engine.
+ * A PLC-inspired embedded core.
+ *
+ * It is not:
+ * A fixed-function timer.
+ * A ladder-logic PLC.
+ *
+ * Core Idea:
+ *
+ * From hardcoded firmware
+ * → To behavior-defined automation.
+ *
+ **********************************************************************************************/
+
+#include <Arduino.h>
+
+// --- Card counts (can be changed later) ---
+const uint8_t NUM_DI = 4;
+const uint8_t NUM_DO = 4;
+const uint8_t NUM_AI = 2;
+const uint8_t NUM_SIO = 4;
+
+const uint8_t TOTAL_CARDS = NUM_DI + NUM_DO + NUM_AI + NUM_SIO;
+
+const uint8_t DI_START = 0;
+const uint8_t DO_START = DI_START + NUM_DI;
+const uint8_t AI_START = DO_START + NUM_DO;
+const uint8_t SIO_START = AI_START + NUM_AI;
+
+#define LIST_CARD_TYPES(X) \
+  X(DigitalInput)          \
+  X(DigitalOutput)         \
+  X(AnalogInput)           \
+  X(SoftIO)
+
+#define LIST_OPERATORS(X) \
+  X(AlwaysTrue)           \
+  X(None)                 \
+  X(LogicalTrue)          \
+  X(LogicalFalse)         \
+  X(PhysicalOn)           \
+  X(PhysicalOff)          \
+  X(Triggered)            \
+  X(TriggerCleared)       \
+  X(GT)                   \
+  X(LT)                   \
+  X(EQ)                   \
+  X(NEQ)                  \
+  X(GTE)                  \
+  X(LTE)                  \
+  X(Running)              \
+  X(Finished)             \
+  X(Stopped)
+
+#define LIST_MODES(X) \
+  X(None)             \
+  X(DI_Rising)        \
+  X(DI_Falling)       \
+  X(DI_Change)
+
+#define LIST_STATES(X)  \
+  X(State_None)         \
+  X(State_DI_Idle)      \
+  X(State_DI_Filtering) \
+  X(State_DI_Qualified) \
+  X(State_DI_Inhibited) \
+  X(State_DO_Idle)      \
+  X(State_DO_OnDelay)   \
+  X(State_DO_OffDelay)  \
+  X(State_DO_Finished)
+
+#define LIST_COMBINE(X) \
+  X(None)               \
+  X(AND)                \
+  X(OR)
+
+#define as_enum(name) name,
+enum logicCardType
+{
+  LIST_CARD_TYPES(as_enum)
+};
+enum logicOperator
+{
+  LIST_OPERATORS(as_enum)
+};
+enum cardMode
+{
+  LIST_MODES(as_enum)
+};
+enum cardState
+{
+  LIST_STATES(as_enum)
+};
+enum combineMode
+{
+  LIST_COMBINE(as_enum)
+};
+#undef as_enum
+
+struct LogicCard
+{
+  // Global unique card ID used by set/reset reference and lookup.
+  uint8_t id;
+  // Type family of the card (DI, DO, AI, SIO).
+  logicCardType type;
+  // Position index within its family (e.g. DI0=0, DI1=1, DO0=0, SIO2=2).
+  uint8_t index;
+  // Hardware pin number for physical cards (255 for virtual SoftIO).
+  uint8_t hwPin;
+
+  // Active Low / Inverted Polarity flag.
+  bool invert;
+
+  // DI: debounce duration for DI
+  // DO/SIO: on-delay duration (wait before activating output)
+  // For DO/SIO 0 means infinite wait to on delay until reset
+  uint32_t setting1;
+  // DI: reserved for future use
+  // DO/SIO: off-delay duration (turn off output after interval ends)
+  // For DO/SIO 0 means infinite wait to off delay until reset
+  uint32_t setting2;
+  // DI: reserved for future use
+  // DO/SIO: repeat count (0 = infinite, 1 = single pulse, N = N full cycles)
+  uint32_t setting3;
+
+  // DI: qualified logical state after debounce/qualification when setCondition is true
+  // DO/SIO: mission latch indicating active cycle (set on trigger, cleared on completion/reset)
+  bool logicalState;
+  // DI: physical input state after polarity adjustment not considering set/reset conditions
+  // DO/SIO: effective output state considering timing and mission state
+  bool physicalState;
+  // DI: edge-triggered one cycle pulse generated when logicalState transitions to true
+  // DO/SIO: one cycle pulse generated on setCondition rising edge to trigger mission start
+  bool triggerFlag;
+
+  // DI: event counter incremented on each qualified edge when setCondition is true
+  // DO/SIO: cycle counter incremented on each physical rising edge to track repeat cycles
+  // Reset to 0 on when reset condition is met for DI/DO/SIO
+  uint32_t currentValue;
+  // DI: timestamp of last qualified edge for debounce timing
+  // DO/SIO: timestamp when current ON-phase started for timing control
+  uint32_t startOnMs;
+  // DI: timestamp of last qualified edge for debounce timing
+  // DO/SIO: timestamp when current OFF-phase started for timing control
+  uint32_t startOffMs;
+  // DI: unused for now, reserved for future use (e.g. long-press tracking)
+  // DO/SIO: counts completed cycles for repeat logic to determine when to finish
+  uint32_t repeatCounter;
+
+  // DI: edge/debounce mode (rising, falling, change)
+  // DO/SIO: legacy mode field for future extensions (e.g. latching, pulsing, toggle modes)
+  cardMode mode;
+  // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
+  // DO/SIO: phase state (Idle, OnDelay, OffDelay, Finished)
+  cardState state;
+
+  // SET Group
+  uint8_t setA_ID;
+  logicOperator setA_Operator;
+  uint32_t setA_Threshold;
+
+  uint8_t setB_ID;
+  logicOperator setB_Operator;
+  uint32_t setB_Threshold;
+
+  combineMode setCombine;
+
+  // RESET Group
+  uint8_t resetA_ID;
+  logicOperator resetA_Operator;
+  uint32_t resetA_Threshold;
+
+  uint8_t resetB_ID;
+  logicOperator resetB_Operator;
+  uint32_t resetB_Threshold;
+
+  combineMode resetCombine;
+};
+
+void setup()
+{
+  // put your setup code here, to run once:
+}
+
+void loop()
+{
+  // put your main code here, to run repeatedly:
+}
