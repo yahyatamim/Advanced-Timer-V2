@@ -216,24 +216,12 @@
  * ------------
  * Defines how a card behaves logically.
  *
- * Examples:
- * - Mode_None       : No special behavior.
- * - DI_Rising       : Digital input event on OFF->ON edge.
- * - DI_Falling      : Digital input event on ON->OFF edge.
- * - DI_Change       : Digital input event on either edge.
- * - DI_Immediate    : Deprecated DI compatibility mode.
- * - DI_Debounced    : Deprecated DI compatibility mode.
- * - Out_NoDelay     : Output changes immediately.
- * - Out_OnDelay     : Output activates after delay.
- * - Out_AutoOff     : Output turns off automatically after time.
- * - AI_Immediate    : Analog input without filtering.
- * - AI_Smoothed     : Analog input with smoothing.
- * - OneShot         : Timer Single pulse behavior.
- * - Repeating       : Timer auto-repeating behavior.
- * - Count_Up        : Counter increments.
- * - Count_Down      : Counter decrements.
+ * DO/SIO canonical usage (current focus):
+ * - DO_ActiveHigh : Physical output ON means GPIO HIGH (normal polarity).
+ * - DO_ActiveLow  : Physical output ON means GPIO LOW (inverted polarity).
  *
- * Mode defines "how the card behaves".
+ * Existing DI/AI modes remain for compatibility with previously saved schema.
+ * For DO/SIO cards, `mode` is treated as hardware polarity selection.
  *
  * --------------------------------------------------------------------------------------------
  *
@@ -241,22 +229,14 @@
  * -------------
  * Defines the current internal lifecycle state of a card.
  *
- * Examples:
- * - State_None          : Undefined / not active.
- * - State_Off           : Inactive state.
- * - State_Debouncing    : Transition filtering in progress.
- * - State_OnDelay       : Waiting for delay completion.
- * - State_AutoOff       : Auto-off countdown running.
- * - State_On            : Active state.
- * - State_Ready         : Ready to start.
- * - State_Running       : Timing/cycle active.
- * - State_Finished      : Timing/cycle completed.
- * - State_Stopped       : Timing/cycle stopped.
- * - State_Idle          : Waiting state.
- * - State_Counting      : Counting active.
- * - State_TargetReached : Count target reached.
+ * DO/SIO canonical phase values:
+ * - State_DO_Idle     : Phase 0, waiting for trigger.
+ * - State_DO_OnDelay  : Phase 1, ON delay in progress.
+ * - State_DO_Active   : Phase 2, active/pulse-high phase.
+ * - State_DO_OffDelay : Phase 3, OFF delay in progress.
  *
- * State defines "where the card currently is".
+ * Existing states remain for backward compatibility across card families.
+ * For DO/SIO cards, state is the phase indicator other cards can evaluate.
  *
  * --------------------------------------------------------------------------------------------
  *
@@ -311,47 +291,38 @@
  *
  * Constants:
  * ----------
- * constant1 : DI polarity selector (0 = active high, 1 = active low).
- *             Other card types may use type-specific meanings.
- * constant2 : DI unused/reserved in current architecture.
- *             Other card types may use type-specific meanings.
+ * constant1 : DO/SIO mission repeat limit.
+ *             = 1  : One-shot pulse.
+ *             > 1  : Run exactly N cycles.
+ *             <= 0 : Infinite repeating (oscillator/blinker mode).
+ * constant2 : Reserved for future DO/SIO extensions (schema-compatible).
  *
  * Core Logic Signals:
  * -------------------
- * physicalState : DI raw signal with polarity applied (non-debounced).
- * logicalState  : DI debounced state gated by SET condition.
- * triggerFlag   : DI one-cycle pulse on qualified edge event.
+ * logicalState  : DO/SIO process latch ("intent/running" state).
+ * physicalState : Time-filtered effective output state used by dependents.
+ * triggerFlag   : One-cycle ignition pulse from setCondition rising edge.
  *
  * Behavior Control:
  * -----------------
- * allowRetrigger : DI unused/ignored (always re-trigger capable by design).
- *                  Kept for cross-card schema compatibility.
+ * allowRetrigger : Ignored/removed behavior, preserved only for schema
+ *                  compatibility. DO/SIO model is non-retriggerable.
  *
  * Generic Settings:
  * -----------------
- * setting1 : DI debounce time in milliseconds.
- *            Other card types may map this to delay/threshold/target.
- *
- * setting2 : DI unused/reserved in current architecture.
- *            Other card types may map this to secondary settings.
+ * setting1 : ON delay / pulse-high duration in milliseconds.
+ * setting2 : OFF delay / pulse-low/rest duration in milliseconds.
  *
  * Runtime Value:
  * --------------
- * currentValue  : DI event counter (increments on qualified trigger events).
- *                AnalogInput may use this for scaled readings.
- * startOnMs     : DI debounce candidate ON timestamp.
- * startOffMs    : DI debounce candidate OFF timestamp.
+ * currentValue  : Persistent cycle counter (increments on physical 0->1 edge).
+ * startOnMs     : Timestamp register for ON-phase timing.
+ * startOffMs    : Timestamp register for OFF-phase timing.
  *
  * Mode & State:
  * -------------
- * mode  : DI edge mode (DI_Rising/DI_Falling/DI_Change as canonical).
- * state : DI runtime state (State_Off/State_Debouncing/State_On).
-
- * DI Unused Variables in this revision:
- * -------------------------------------
- * - allowRetrigger (ignored for DI runtime behavior)
- * - constant2 (reserved for non-DI types/future use)
- * - setting2 (reserved for non-DI types/future use)
+ * mode  : DO/SIO polarity interface (DO_ActiveHigh or DO_ActiveLow).
+ * state : DO/SIO phase indicator (Idle/OnDelay/Active/OffDelay).
  *
  * Logic Conditions:
  * -----------------
@@ -374,21 +345,17 @@
  * ============================================================================================
  *
  * DigitalInput:
- * - logicalState reflects interpreted input.
- * - physicalState reflects raw hardware state.
- * - triggerFlag indicates edge transitions.
+ * - Existing behavior remains as previously defined.
  *
  * DigitalOutput:
- * - logicalState represents desired output state.
- * - physicalState represents actual output pin state.
+ * - Executes mission/timing/counting as a self-contained state machine.
+ * - Drives hardware pin according to `physicalState` and `mode` polarity.
  *
  * AnalogInput:
- * - currentValue holds analog reading.
- * - logicalState may represent threshold-based logic.
+ * - Existing behavior remains as previously defined.
  *
  * SoftIO:
- * - Behaves like DigitalOutput without hardware.
- * - Used for internal logic routing.
+ * - Same mission/timing/counting model as DO, but virtual (no hardware pin).
  *
  * Note:
  * - Numeric comparison operators use currentValue.
@@ -407,6 +374,49 @@
  *
  * The ultimate goal is to build a scalable, debuggable, and UI-configurable
  * automation engine similar in spirit to industrial PLC systems.
+ *
+ * ============================================================================================
+ * 6) DO/SIO BEHAVIOR CONTRACT (REFERENCE FOR NEXT IMPLEMENTATION)
+ * ============================================================================================
+ *
+ * This section is the definitive reference for DigitalOutput and SoftIO cards.
+ * DI behavior and DI-related documentation remain intact and preserved.
+ *
+ * - `setCondition` rising edge generates one-cycle `triggerFlag`.
+ * - `triggerFlag` is the only ignition source for process start.
+ * - `triggerFlag` latches `logicalState = true` (process starts and stays
+ * latched).
+ * - Non-retriggerable model: new triggers are ignored while process is active.
+ * - `resetCondition == true` is a hard stop:
+ *   `logicalState=false`, `physicalState=false`, `currentValue=0`.
+ *
+ * Variable-by-variable intent:
+ * - `id`, `type`, `index`, `hwPin`:
+ *   identity and mapping fields; SIO ignores `hwPin` while DO maps
+ * `physicalState` to pin.
+ * - `constant1`: repeat mission limit (1 one-shot, >1 batch, <=0 infinite).
+ * - `constant2`: reserved.
+ * - `logicalState`: process latch/intent state.
+ * - `physicalState`: effective time-filtered output truth.
+ * - `triggerFlag`: one-cycle ignition pulse from set rising edge.
+ * - `allowRetrigger`: schema-compatibility field only (ignored by DO/SIO
+ * contract).
+ * - `setting1`: ON duration / pulse-high time / on-delay window (ms).
+ * - `setting2`: OFF duration / pulse-low rest / inter-cycle delay (ms).
+ * - `currentValue`: execution odometer; increments on each `physicalState`
+ * rising edge.
+ * - `startOnMs`, `startOffMs`: internal phase timing registers.
+ * - `mode`: output polarity (active-high / active-low).
+ * - `state`: phase indicator:
+ *   `State_DO_Idle` , `State_DO_OnDelay` ,
+ *   `State_DO_Active` , `State_DO_OffDelay` .
+ * - `setCondition` and `resetCondition` groups:
+ *   set group generates start trigger edges, reset group provides immediate
+ * hard stop/clear.
+ *
+ * DO vs SIO:
+ * - DO maps `physicalState` to actual hardware pin via `hwPin`.
+ * - SIO uses identical behavior as virtual signal (`hwPin` ignored).
  *
  **********************************************************************************************/
 
@@ -429,12 +439,18 @@ const uint8_t AI_Pins[NUM_AI] = {35, 34};          // Analog Input pins
 const uint32_t TICK_MS = 10;
 
 // 1. Define the Master Lists
+// Canonical card families sharing one schema and serialization model.
+// DI/AI behavior remains backward-compatible with prior configuration files.
+// DO/SIO behavior is documented as the next implementation contract.
 #define LIST_CARD_TYPES(X) \
   X(DigitalInput)          \
   X(DigitalOutput)         \
   X(AnalogInput)           \
   X(SoftIO)
 
+// Operators for evaluating another card inside set/reset logic groups.
+// Numeric operators compare against `currentValue`.
+// State operators evaluate process lifecycle visibility across cards.
 #define LIST_OPERATORS(X) \
   X(Op_None)              \
   X(Op_AlwaysTrue)        \
@@ -454,6 +470,11 @@ const uint32_t TICK_MS = 10;
   X(Op_Finished)          \
   X(Op_Stopped)
 
+// Unified mode list kept schema-compatible across card families.
+// For DO/SIO cards, mode is the polarity interface selector:
+// - DO_ActiveHigh: logical ON maps to physical HIGH.
+// - DO_ActiveLow : logical ON maps to physical LOW.
+// DI/AI legacy mode values stay available for persisted projects.
 #define LIST_MODES(X) \
   X(Mode_None)        \
   X(DI_Rising)        \
@@ -461,6 +482,8 @@ const uint32_t TICK_MS = 10;
   X(DI_Change)        \
   X(DI_Immediate)     \
   X(DI_Debounced)     \
+  X(DO_ActiveHigh)    \
+  X(DO_ActiveLow)     \
   X(Out_NoDelay)      \
   X(Out_OnDelay)      \
   X(Out_AutoOff)      \
@@ -471,20 +494,27 @@ const uint32_t TICK_MS = 10;
   X(Count_Up)         \
   X(Count_Down)
 
-#define LIST_STATES(X) \
-  X(State_None)        \
-  X(State_Off)         \
-  X(State_Debouncing)  \
-  X(State_OnDelay)     \
-  X(State_AutoOff)     \
-  X(State_On)          \
-  X(State_Ready)       \
-  X(State_Running)     \
-  X(State_Finished)    \
-  X(State_Stopped)     \
-  X(State_Idle)        \
-  X(State_Counting)    \
-  X(State_TargetReached)
+// Unified runtime state list kept schema-compatible across card families.
+// DO/SIO canonical phase contract:
+// Other values remain for existing DI/AI and legacy process flows.
+#define LIST_STATES(X)   \
+  X(State_None)          \
+  X(State_Off)           \
+  X(State_Debouncing)    \
+  X(State_OnDelay)       \
+  X(State_AutoOff)       \
+  X(State_On)            \
+  X(State_Ready)         \
+  X(State_Running)       \
+  X(State_Finished)      \
+  X(State_Stopped)       \
+  X(State_Idle)          \
+  X(State_Counting)      \
+  X(State_TargetReached) \
+  X(State_DO_Idle)       \
+  X(State_DO_OnDelay)    \
+  X(State_DO_Active)     \
+  X(State_DO_OffDelay)
 
 #define LIST_COMBINE(X) \
   X(Combine_None)       \
@@ -499,41 +529,275 @@ enum cardState { LIST_STATES(as_enum) };
 enum logicCombine { LIST_COMBINE(as_enum) };
 #undef as_enum
 
-struct LogicCard {
-  uint8_t id;
-  logicCardType type;
-  uint8_t index;
-  uint8_t hwPin;
-  float constant1;        // DI: polarity selector (0=active high, 1=active low)
-  float constant2;        // DI: unused/reserved
-  bool logicalState;      // DI: debounced state gated by SET condition
-  bool physicalState;     // DI: raw pin state after polarity
-  bool triggerFlag;       // DI: one-cycle qualified edge pulse
-  bool allowRetrigger;    // DI: ignored, kept for schema compatibility
-  uint32_t setting1;      // DI: debounce time (ms)
-  uint32_t setting2;      // DI: unused/reserved
-  uint32_t currentValue;  // DI: event counter
-  uint32_t startOnMs;     // DI: debounce candidate ON timestamp
-  uint32_t startOffMs;    // DI: debounce candidate OFF timestamp
-  cardMode mode;          // DI: canonical edge mode (Rising/Falling/Change)
-  cardState state;        // DI: Off / Debouncing / On
+// ----------------------------------------------------------------------------
+// DO/SIO semantic aliases (non-breaking readability layer).
+// These aliases do not change enum values or serialization schema.
+// ----------------------------------------------------------------------------
+constexpr cardMode Mode_DO_PolarityActiveHigh = DO_ActiveHigh;
+constexpr cardMode Mode_DO_PolarityActiveLow = DO_ActiveLow;
 
-  // LogicCondition setCondition;
+constexpr cardState Phase_DO_Idle = State_DO_Idle;
+constexpr cardState Phase_DO_OnDelay = State_DO_OnDelay;
+constexpr cardState Phase_DO_Active = State_DO_Active;
+constexpr cardState Phase_DO_OffDelay = State_DO_OffDelay;
+
+// ----------------------------------------------------------------------------
+// DO/SIO quick map (documentation only):
+// - Trigger source     : setCondition rising edge -> triggerFlag (one cycle).
+// - Latch signal       : logicalState (latched until reset/mission completion).
+// - Effective output   : physicalState (timed truth used by dependent cards).
+// - Counter behavior   : currentValue increments on physicalState 0->1
+// transitions.
+// - Phase progression  : Idle(0) -> OnDelay(1) -> Active(2) -> OffDelay(3) ->
+// next/idle.
+// ----------------------------------------------------------------------------
+
+struct LogicCard {
+  // ----------------------------------------------------------------------------
+  // Identity and binding fields.
+  // These fields let every card participate in one global reference graph.
+  // ----------------------------------------------------------------------------
+
+  // Global unique card ID.
+  // Used by set/reset references, lookups, and JSON persistence keys.
+  // Stable IDs allow cards to reference each other across reboots.
+  uint8_t id;
+
+  // Card family discriminator.
+  // DI and AI represent physical inputs, DO represents hardware-driven outputs,
+  // and SIO represents virtual output-like logic signals.
+  logicCardType type;
+
+  // Zero-based index inside its own family.
+  // Example: DO0..DOn for outputs, DI0..DIn for digital inputs.
+  // Used for human-readable mapping and per-family pin tables.
+  uint8_t index;
+
+  // Bound hardware pin for physical cards.
+  // DI/DO/AI: actual MCU pin/channel mapping used by hardware layer.
+  // SIO: no hardware mapping; value is ignored (conventionally 255).
+  uint8_t hwPin;
+
+  // ----------------------------------------------------------------------------
+  // Persistent configuration constants.
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Input polarity selector in legacy DI flow
+  //   (0 = active high, 1 = active low).
+  // DO/SIO role:
+  // - Mission repeat limit controller.
+  // - 1  => one-shot cycle.
+  // - >1 => execute exactly N cycles.
+  // - <=0 => repeat infinitely (oscillator/blinker behavior).
+  float constant1;
+
+  // DI role:
+  // - Reserved / currently unused in active DI behavior.
+  // DO/SIO role:
+  // - Reserved for future extensions (e.g., waveform/PWM metadata).
+  // - Kept in schema for forward compatibility.
+  float constant2;
+
+  // ----------------------------------------------------------------------------
+  // Runtime signal image (observable by other cards).
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Debounced and qualified DI logical result.
+  // DO/SIO role:
+  // - Process latch / intent state.
+  // - Set true by trigger event and remains latched until reset or completion.
+  bool logicalState;
+
+  // DI role:
+  // - Physical input state after DI polarity/qualification path.
+  // DO/SIO role:
+  // - Time-shaped output state produced by timing phases.
+  // - Main signal dependents should consume for effective output truth.
+  bool physicalState;
+
+  // DI role:
+  // - One-cycle edge pulse from configured DI edge mode.
+  // DO/SIO role:
+  // - One-cycle ignition pulse from setCondition rising edge.
+  // - Non-retriggerable contract: ignored while process is already active.
+  bool triggerFlag;
+
+  // DI role:
+  // - Legacy behavior switch retained for schema compatibility.
+  // DO/SIO role:
+  // - Intentionally ignored by contract (non-retriggerable model).
+  // - Kept to avoid schema migration breaks with prior saved data.
+  bool allowRetrigger;
+
+  // ----------------------------------------------------------------------------
+  // Timing parameters (milliseconds).
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Debounce time window.
+  // DO/SIO role:
+  // - ON timing parameter (on-delay / pulse-high duration).
+  // - 0 can be used to collapse/skip ON hold behavior depending on mode.
+  uint32_t setting1;
+
+  // DI role:
+  // - Reserved / currently unused in active DI behavior.
+  // DO/SIO role:
+  // - OFF timing parameter (off-delay / pulse-low rest interval).
+  // - Governs pause between cycles for repeating missions.
+  uint32_t setting2;
+
+  // ----------------------------------------------------------------------------
+  // Runtime counters and timer registers.
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Qualified DI event counter.
+  // DO/SIO role:
+  // - Mission odometer (cycle counter).
+  // - Increments on each physicalState rising edge (0 -> 1).
+  // - Persists until resetCondition clears it.
+  uint32_t currentValue;
+
+  // DI role:
+  // - Timestamp for ON debounce candidate window start.
+  // DO/SIO role:
+  // - Internal register storing ON-phase start time.
+  // - Compared against millis() to advance phase timing.
+  uint32_t startOnMs;
+
+  // DI role:
+  // - Timestamp for OFF debounce candidate window start.
+  // DO/SIO role:
+  // - Internal register storing OFF-phase start time.
+  // - Compared against millis() to advance phase timing.
+  uint32_t startOffMs;
+
+  // ----------------------------------------------------------------------------
+  // Mode and phase visibility.
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - DI edge behavior selector (Rising/Falling/Change/Immediate/Debounced).
+  // DO/SIO role:
+  // - Hardware polarity adapter for physical mapping semantics.
+  // - DO_ActiveHigh or DO_ActiveLow while logic remains positive internally.
+  cardMode mode;
+
+  // DI role:
+  // - Current runtime phase in DI filtering/debounce flow.
+  // DO/SIO role:
+  // - Public timing phase indicator:
+  //   Idle(0), OnDelay(1), Active(2), OffDelay(3).
+  // - Exposed so other cards can depend on process phase explicitly.
+  cardState state;
+
+  // ----------------------------------------------------------------------------
+  // SET condition group (start gatekeeper).
+  // Evaluated for rising-edge trigger generation.
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Source card ID for DI start qualification graph.
+  // DO/SIO role:
+  // - Source card ID for clause-A of setCondition (trigger gate).
+  // - Points to card evaluated by `setA_Operator`.
   int setA_ID;
+
+  // DI role:
+  // - Operator selecting which DI source signal/property is tested.
+  // DO/SIO role:
+  // - Clause-A evaluation operator for setCondition.
+  // - Evaluates source logical/physical/trigger/state/value semantics.
   logicOperator setA_Operator;
+
+  // DI role:
+  // - Numeric threshold used when DI clause-A operator is value-based.
+  // DO/SIO role:
+  // - Numeric threshold for clause-A numeric operators vs source
+  // `currentValue`.
   uint32_t setA_Threshold;
+
+  // DI role:
+  // - Optional second DI source card ID for composite start conditions.
+  // DO/SIO role:
+  // - Clause-B source card ID for setCondition.
+  // - Used when `setCombine` is `Combine_AND` or `Combine_OR`.
   int setB_ID;
+
+  // DI role:
+  // - Optional second DI operator for composite start conditions.
+  // DO/SIO role:
+  // - Clause-B evaluation operator for setCondition.
+  // - Same signal semantics as `setA_Operator`.
   logicOperator setB_Operator;
+
+  // DI role:
+  // - Threshold paired with DI clause-B numeric operator.
+  // DO/SIO role:
+  // - Threshold paired with clause-B numeric operator against source value.
   uint32_t setB_Threshold;
+
+  // DI role:
+  // - Combines DI clause-A and clause-B evaluations for start decisions.
+  // DO/SIO role:
+  // - setCondition combiner: `Combine_None` uses clause-A only.
+  // - `Combine_AND`/`Combine_OR` includes clause-B in trigger decision.
   logicCombine setCombine;
 
-  // LogicCondition resetCondition;
+  // ----------------------------------------------------------------------------
+  // RESET condition group (hard stop + clear gatekeeper).
+  // Evaluated continuously; true causes immediate process reset.
+  // ----------------------------------------------------------------------------
+
+  // DI role:
+  // - Source card ID for DI reset/clear qualification graph.
+  // DO/SIO role:
+  // - Source card ID for clause-A of resetCondition (hard stop gate).
+  // - Points to card evaluated by `resetA_Operator`.
   int resetA_ID;
+
+  // DI role:
+  // - Operator selecting DI source signal/property for reset behavior.
+  // DO/SIO role:
+  // - Clause-A evaluation operator for resetCondition.
+  // - True result can immediately clear mission runtime state.
   logicOperator resetA_Operator;
+
+  // DI role:
+  // - Numeric threshold for DI clause-A value-based reset operators.
+  // DO/SIO role:
+  // - Numeric threshold for clause-A numeric operators vs source
+  // `currentValue`.
   uint32_t resetA_Threshold;
+
+  // DI role:
+  // - Optional second DI source card ID for composite reset logic.
+  // DO/SIO role:
+  // - Clause-B source card ID for resetCondition.
+  // - Used when `resetCombine` is `Combine_AND` or `Combine_OR`.
   int resetB_ID;
+
+  // DI role:
+  // - Optional second DI operator for composite reset logic.
+  // DO/SIO role:
+  // - Clause-B evaluation operator for resetCondition.
+  // - Same signal semantics as `resetA_Operator`.
   logicOperator resetB_Operator;
+
+  // DI role:
+  // - Threshold paired with DI clause-B numeric reset operator.
+  // DO/SIO role:
+  // - Threshold paired with clause-B numeric operator against source value.
   uint32_t resetB_Threshold;
+
+  // DI role:
+  // - Combines DI clause-A and clause-B reset evaluations.
+  // DO/SIO role:
+  // - resetCondition combiner: `Combine_None` uses clause-A only.
+  // - True resetCondition provides hard stop and counter clear semantics.
   logicCombine resetCombine;
 };
 LogicCard logicCards[totalCards];
@@ -788,6 +1052,19 @@ void initLogicEngine() {
 
     for (uint8_t i = 0; i < totalCards; i++) {
       logicCards[i].id = i;
+      logicCards[i].constant1 = 1;
+      logicCards[i].constant2 = 0;
+      logicCards[i].logicalState = false;
+      logicCards[i].physicalState = false;
+      logicCards[i].triggerFlag = false;
+      logicCards[i].allowRetrigger = false;
+      logicCards[i].setting1 = 0;
+      logicCards[i].setting2 = 0;
+      logicCards[i].currentValue = 0;
+      logicCards[i].startOnMs = 0;
+      logicCards[i].startOffMs = 0;
+      logicCards[i].mode = Mode_None;
+      logicCards[i].state = State_None;
 
       // --- Self-Reference Logic ---
       logicCards[i].setA_ID = i;
@@ -798,9 +1075,13 @@ void initLogicEngine() {
       logicCards[i].setCombine = Combine_None;
       logicCards[i].resetCombine = Combine_None;
       logicCards[i].setA_Operator = Op_None;
+      logicCards[i].setB_Operator = Op_None;
       logicCards[i].resetA_Operator = Op_None;
-      logicCards[i].startOnMs = 0;
-      logicCards[i].startOffMs = 0;
+      logicCards[i].resetB_Operator = Op_None;
+      logicCards[i].setA_Threshold = 0;
+      logicCards[i].setB_Threshold = 0;
+      logicCards[i].resetA_Threshold = 0;
+      logicCards[i].resetB_Threshold = 0;
 
       // --- Hardware Pin Assignment ---
       if (i < NUM_DI) {
@@ -811,6 +1092,8 @@ void initLogicEngine() {
         logicCards[i].type = DigitalOutput;
         logicCards[i].index = i - NUM_DI;
         logicCards[i].hwPin = DO_Pins[logicCards[i].index];
+        logicCards[i].mode = DO_ActiveHigh;
+        logicCards[i].state = State_DO_Idle;
       } else if (i < (NUM_DI + NUM_DO + NUM_AI)) {
         logicCards[i].type = AnalogInput;
         logicCards[i].index = i - (NUM_DI + NUM_DO);
@@ -820,6 +1103,8 @@ void initLogicEngine() {
         logicCards[i].hwPin = 255;
         logicCards[i].type = SoftIO;
         logicCards[i].index = i - (NUM_DI + NUM_DO + NUM_AI);
+        logicCards[i].mode = DO_ActiveHigh;
+        logicCards[i].state = State_DO_Idle;
       }
     }
     saveConfig();
