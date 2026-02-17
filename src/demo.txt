@@ -313,19 +313,48 @@
  *
  *
  * ============================================================================================
- * 5) CONDITION SYSTEM CONTRACT
+ * 5) SEQUENTIAL SCAN ENGINE CONTRACT
  * ============================================================================================
  *
- * SET condition:
- * Evaluated continuously.
- * Rising edge generates triggerFlag.
+ * Runtime model:
+ * The automation kernel executes as a deterministic sequential scan engine.
+ * One full scan cycle processes card families in a fixed order, then repeats.
  *
- * RESET condition:
- * Evaluated continuously.
- * When TRUE:
- * - Immediate hard stop
- * - Clear all runtime state (logicalState, counters, timers)
- * - Inhibit further progression
+ * Canonical scan order per cycle:
+ * 1) DigitalInput (DI) cards   : DI[0] -> DI[1] -> ... -> DI[N-1]
+ * 2) AnalogInput (AI) cards    : AI[0] -> AI[1] -> ... -> AI[M-1]
+ * 3) SoftIO (SIO) cards        : SIO[0] -> SIO[1] -> ... -> SIO[K-1]
+ * 4) DigitalOutput (DO) cards  : DO[0] -> DO[1] -> ... -> DO[P-1]
+ * 5) End of scan -> restart from DI[0]
+ *
+ * Per-card execution rule:
+ * - Each card is fully evaluated when visited in sequence.
+ * - The engine updates all relevant runtime fields for that card before moving on.
+ *   (e.g., physicalState, logicalState, triggerFlag, currentValue, state, timing registers)
+ *
+ * DI-specific behavior during scan:
+ * - On each DI visit, evaluate physical input first.
+ * - Apply invert/debounce/gating/reset rules.
+ * - Update logical state, trigger pulse, and counter (if conditions permit).
+ * - Commit DI runtime updates before visiting next DI.
+ *
+ * Cross-family visibility:
+ * - Cards evaluated later in the same scan see already-updated runtime values
+ *   of cards evaluated earlier in that scan.
+ * - Cards evaluated earlier see later-card changes only on the next scan.
+ *
+ * Determinism requirement:
+ * - Scan order must remain fixed and predictable for repeatable behavior.
+ * - No parallel/async card evaluation is assumed in this contract.
+ *
+ * Reset priority:
+ * - resetCondition handling remains highest priority at card level as defined elsewhere.
+ * - Reset effects are applied immediately when that card is evaluated in scan.
+ *
+ * Note:
+ * - This section defines global execution scheduling.
+ * - Card-local logic semantics (DI/DO/SIO modes, phase transitions, repeat logic, etc.)
+ *   are defined in their respective contract sections.
  *
  *
  * ============================================================================================
