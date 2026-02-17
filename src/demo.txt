@@ -164,8 +164,35 @@
  * DI_Change
  *
  * DO/SIO Modes:
- * (polarity now mainly controlled by 'invert' field)
- * Legacy modes remain for schema compatibility.
+ * DO_Normal
+ * - First action: wait setting1 (OnDelay), then run Active, then OffDelay.
+ * - Input dependency: latched (ignores setCondition after trigger).
+ * - Repeat behavior: full cycle for cycles 2..N.
+ * - Primary use: sequential startups and deterministic delayed activation.
+ *
+ * DO_Immediate
+ * - First action: skip initial OnDelay and enter Active immediately.
+ * - Input dependency: latched (ignores setCondition after trigger).
+ * - Repeat behavior: cycles 2..N run full cycle timing (OnDelay -> Active -> OffDelay).
+ * - Primary use: leading-edge pulse with stable periodic follow-up cycles.
+ *
+ * DO_Gated
+ * - First action: wait setting1 (OnDelay), then run Active, then OffDelay.
+ * - Input dependency: gated (setCondition must stay true while running).
+ * - Repeat behavior: full cycle while gate stays true.
+ * - Primary use: safety interlock / enable chain behavior.
+ *
+ * DO/SIO comparison matrix:
+ * | Feature | DO_Normal | DO_Immediate | DO_Gated |
+ * | --- | --- | --- | --- |
+ * | First action | Wait setting1 | Active immediately | Wait setting1 |
+ * | Input dependency | Latched | Latched | Gated |
+ * | Repeat 2..N | Full cycle | Full cycle | Full cycle if gate stays true |
+ * | Primary use | Sequential startups | Instant alert pulse | Safety / interlock |
+ *
+ * Legacy mode values:
+ * - Retained for schema compatibility only.
+ * - Deprecated for new DO/SIO configurations.
  *
  *
  * 3.4 cardState
@@ -177,6 +204,7 @@
  *
  * State_DO_Idle
  * State_DO_OnDelay
+ * State_DO_Active
  * State_DO_OffDelay
  * State_DO_Finished
  *
@@ -251,10 +279,12 @@
  * Mode & State:
  *
  * mode → DI: edge / debounce behavior
- *        DO/SIO: legacy / future mode extensions
+ *        DO/SIO: execution engine switch
+ *                DO_Normal, DO_Immediate, DO_Gated
+ *                (legacy mode values are compatibility-only)
  *
  * state → DI: filtering lifecycle state
- *         DO/SIO: phase state (Idle, OnDelay, OffDelay, Finished)
+ *         DO/SIO: phase state (Idle, OnDelay, Active, OffDelay, Finished)
  *
  *
  * SET Group Fields:
@@ -325,15 +355,26 @@
  * ============================================================================================
  *
  * Trigger Model:
+ * Mode switch behavior:
+ * - DO_Normal:
+ *   On trigger: Idle -> OnDelay -> Active -> OffDelay -> repeat/finalize.
+ * - DO_Immediate:
+ *   On trigger: Idle -> Active (first cycle only), then OffDelay.
+ *   For cycles 2..N: OnDelay -> Active -> OffDelay.
+ * - DO_Gated:
+ *   Same timing sequence as DO_Normal, but setCondition must stay true.
+ *   If setCondition drops during OnDelay or Active, abort immediately to Idle.
  * setCondition rising edge → triggerFlag (one cycle)
  * triggerFlag → latch logicalState = true  (non-retriggerable while running)
  *
  * Non-Retriggerable:
- * While logicalState == true, new triggers are ignored.
+ * New setCondition rising edges are ignored while state is not
+ * State_DO_Idle or State_DO_Finished.
  *
  * Phases per cycle:
+ * Canonical sequence: Idle -> OnDelay -> Active -> OffDelay -> (repeat or Finished/Idle)
  *
- * Idle → OnDelay → Active → OffDelay → (repeat or Idle)
+ * Idle → OnDelay → Active → OffDelay → (repeat or Finished/Idle)
  *
  * Repeat logic:
  * - setting3 = 0     → repeat forever until reset
@@ -353,6 +394,12 @@
  * - Immediate hard stop
  * - Clears counter, timers, logicalState
  * - Forces Idle
+ * - Has highest priority over mode execution
+ *
+ * Execution Note:
+ * - Retriggering is blocked while running (re-arm only in Idle or Finished).
+ * - DO_Gated aborts mission on gate loss during OnDelay/Active.
+ * - resetCondition always preempts all modes.
  *
  *
  * ============================================================================================
@@ -420,7 +467,10 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(None)             \
   X(DI_Rising)        \
   X(DI_Falling)       \
-  X(DI_Change)
+  X(DI_Change)        \
+  X(DO_Normal)        \
+  X(DO_Immediate)     \
+  X(DO_Gated)
 
 #define LIST_STATES(X)  \
   X(State_None)         \
@@ -430,6 +480,7 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(State_DI_Inhibited) \
   X(State_DO_Idle)      \
   X(State_DO_OnDelay)   \
+  X(State_DO_Active)    \
   X(State_DO_OffDelay)  \
   X(State_DO_Finished)
 
@@ -512,10 +563,11 @@ struct LogicCard
   uint32_t repeatCounter;
 
   // DI: edge/debounce mode (rising, falling, change)
-  // DO/SIO: legacy mode field for future extensions (e.g. latching, pulsing, toggle modes)
+  // DO/SIO: execution mode switch for timing semantics (DO_Normal/DO_Immediate/DO_Gated)
+  // Legacy mode values are deprecated and kept for schema compatibility only.
   cardMode mode;
   // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
-  // DO/SIO: phase state (Idle, OnDelay, OffDelay, Finished)
+  // DO/SIO: phase state (Idle, OnDelay, Active, OffDelay, Finished)
   cardState state;
 
   // SET Group
