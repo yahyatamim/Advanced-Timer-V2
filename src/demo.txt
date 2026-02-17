@@ -159,9 +159,46 @@
  * --------------------------------------------------------------------------------------------
  *
  * DI Modes:
+ *
+ * DI modes determine TWO things:
+ * 1. Which edge type triggers the one-cycle pulse (triggerFlag)
+ * 2. Which edge type increments the event counter (currentValue)
+ *
  * DI_Rising
+ * - Triggers on: LOW → HIGH transition (rising edge only)
+ * - Counter increments on: rising edges only
+ * - Pulse (triggerFlag): generated on each rising edge (after debounce)
+ * - Use case: Count button presses, start signals, rising events
+ * - Example: Button pressed 3 times → currentValue = 3
+ *
  * DI_Falling
+ * - Triggers on: HIGH → LOW transition (falling edge only)
+ * - Counter increments on: falling edges only
+ * - Pulse (triggerFlag): generated on each falling edge (after debounce)
+ * - Use case: Count button releases, stop signals, falling events
+ * - Example: Button released 3 times → currentValue = 3
+ *
  * DI_Change
+ * - Triggers on: ANY transition (both rising AND falling edges)
+ * - Counter increments on: all edges (both directions)
+ * - Pulse (triggerFlag): generated on each edge (after debounce)
+ * - Use case: Count total state changes, toggle-based behavior
+ * - Example: Button pressed and released once → currentValue = 2 (both edges)
+ *
+ * DI Mode Behavior Matrix:
+ * | Mode | Rising Edge | Falling Edge | Counter Behavior |
+ * | --- | --- | --- | --- |
+ * | DI_Rising | Counts ✓ | Ignores ✗ | Increments only on ↑ |
+ * | DI_Falling | Ignores ✗ | Counts ✓ | Increments only on ↓ |
+ * | DI_Change | Counts ✓ | Counts ✓ | Increments on any transition |
+ *
+ * Important: Mode acts as a COUNTER INCREMENT FILTER
+ * - Edge detection is mode-dependent
+ * - triggerFlag pulse is ONLY generated when detected edge matches mode
+ * - currentValue only increments when detected edge matches mode
+ * - Debounce (setting1) is applied before mode checking
+ * - All counter increments occur only when setCondition == true
+ *
  *
  * DO/SIO Modes:
  * DO_Normal
