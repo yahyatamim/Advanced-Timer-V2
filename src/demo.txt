@@ -165,7 +165,7 @@
  *
  * DO/SIO Modes:
  * DO_Normal
- * - First action: wait setting1 (OnDelay), then run Active, then OffDelay.
+ * - First action: wait setting1 (OnDelay), then run Active.
  * - Input dependency: latched (ignores setCondition after trigger).
  * - Repeat behavior: full cycle for cycles 2..N.
  * - Primary use: sequential startups and deterministic delayed activation.
@@ -173,11 +173,11 @@
  * DO_Immediate
  * - First action: skip initial OnDelay and enter Active immediately.
  * - Input dependency: latched (ignores setCondition after trigger).
- * - Repeat behavior: cycles 2..N run full cycle timing (OnDelay -> Active -> OffDelay).
+ * - Repeat behavior: cycles 2..N run full cycle timing (OnDelay -> Active).
  * - Primary use: leading-edge pulse with stable periodic follow-up cycles.
  *
  * DO_Gated
- * - First action: wait setting1 (OnDelay), then run Active, then OffDelay.
+ * - First action: wait setting1 (OnDelay), then run Active.
  * - Input dependency: gated (setCondition must stay true while running).
  * - Repeat behavior: full cycle while gate stays true.
  * - Primary use: safety interlock / enable chain behavior.
@@ -205,7 +205,6 @@
  * State_DO_Idle
  * State_DO_OnDelay
  * State_DO_Active
- * State_DO_OffDelay
  * State_DO_Finished
  *
  *
@@ -284,7 +283,7 @@
  *                (legacy mode values are compatibility-only)
  *
  * state → DI: filtering lifecycle state
- *         DO/SIO: phase state (Idle, OnDelay, Active, OffDelay, Finished)
+ *         DO/SIO: phase state (Idle, OnDelay, Active, Finished)
  *
  *
  * SET Group Fields:
@@ -357,10 +356,10 @@
  * Trigger Model:
  * Mode switch behavior:
  * - DO_Normal:
- *   On trigger: Idle -> OnDelay -> Active -> OffDelay -> repeat/finalize.
+ *   On trigger: Idle -> OnDelay -> Active -> repeat/finalize.
  * - DO_Immediate:
- *   On trigger: Idle -> Active (first cycle only), then OffDelay.
- *   For cycles 2..N: OnDelay -> Active -> OffDelay.
+ *   On trigger: Idle -> Active (first cycle only).
+ *   For cycles 2..N: OnDelay -> Active.
  * - DO_Gated:
  *   Same timing sequence as DO_Normal, but setCondition must stay true.
  *   If setCondition drops during OnDelay or Active, abort immediately to Idle.
@@ -372,9 +371,9 @@
  * State_DO_Idle or State_DO_Finished.
  *
  * Phases per cycle:
- * Canonical sequence: Idle -> OnDelay -> Active -> OffDelay -> (repeat or Finished/Idle)
+ * Canonical sequence: Idle -> OnDelay -> Active -> (repeat or Finished/Idle)
  *
- * Idle → OnDelay → Active → OffDelay → (repeat or Finished/Idle)
+ * Idle → OnDelay → Active → (repeat or Finished/Idle)
  *
  * Repeat logic:
  * - setting3 = 0     → repeat forever until reset
@@ -481,7 +480,6 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(State_DO_Idle)      \
   X(State_DO_OnDelay)   \
   X(State_DO_Active)    \
-  X(State_DO_OffDelay)  \
   X(State_DO_Finished)
 
 #define LIST_COMBINE(X) \
@@ -567,7 +565,7 @@ struct LogicCard
   // Legacy mode values are deprecated and kept for schema compatibility only.
   cardMode mode;
   // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
-  // DO/SIO: phase state (Idle, OnDelay, Active, OffDelay, Finished)
+  // DO/SIO: phase state (Idle, OnDelay, Active, Finished)
   cardState state;
 
   // SET Group
