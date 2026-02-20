@@ -570,6 +570,10 @@ const uint8_t DO_START = DI_START + NUM_DI;
 const uint8_t AI_START = DO_START + NUM_DO;
 const uint8_t SIO_START = AI_START + NUM_AI;
 
+const uint8_t DI_Pins[NUM_DI] = {13, 12, 14, 27};  // Digital Input pins
+const uint8_t DO_Pins[NUM_DO] = {26, 25, 33, 32};  // Digital Output pins
+const uint8_t AI_Pins[NUM_AI] = {35, 34};          // Analog Input pins
+
 #define LIST_CARD_TYPES(X) \
   X(DigitalInput)          \
   X(DigitalOutput)         \
