@@ -225,7 +225,8 @@
  * | First action | Wait setting1 | Active immediately | Wait setting1 |
  * | Input dependency | Latched | Latched | Gated |
  * | Repeat 2..N | Full cycle | Full cycle | Full cycle if gate stays true |
- * | Primary use | Sequential startups | Instant alert pulse | Safety / interlock |
+ * | Primary use | Sequential startups | Instant alert pulse | Safety /
+ * interlock |
  *
  * Legacy mode values:
  * - Retained for schema compatibility only.
@@ -284,7 +285,8 @@
  *                 0     = infinite
  *                 1     = one-shot
  *                 >1    = exactly N full cycles
- *            DI:     extra parameter / future use (e.g. filter samples, long-press threshold…)
+ *            DI:     extra parameter / future use (e.g. filter samples,
+ * long-press threshold…)
  *
  *
  * Core Runtime Signals:
@@ -366,8 +368,9 @@
  *
  * Per-card execution rule:
  * - Each card is fully evaluated when visited in sequence.
- * - The engine updates all relevant runtime fields for that card before moving on.
- *   (e.g., physicalState, logicalState, triggerFlag, currentValue, state, timing registers)
+ * - The engine updates all relevant runtime fields for that card before moving
+ * on. (e.g., physicalState, logicalState, triggerFlag, currentValue, state,
+ * timing registers)
  *
  * DI-specific behavior during scan:
  * - On each DI visit, evaluate physical input first.
@@ -385,13 +388,14 @@
  * - No parallel/async card evaluation is assumed in this contract.
  *
  * Reset priority:
- * - resetCondition handling remains highest priority at card level as defined elsewhere.
+ * - resetCondition handling remains highest priority at card level as defined
+ * elsewhere.
  * - Reset effects are applied immediately when that card is evaluated in scan.
  *
  * Note:
  * - This section defines global execution scheduling.
- * - Card-local logic semantics (DI/DO/SIO modes, phase transitions, repeat logic, etc.)
- *   are defined in their respective contract sections.
+ * - Card-local logic semantics (DI/DO/SIO modes, phase transitions, repeat
+ * logic, etc.) are defined in their respective contract sections.
  *
  *
  * ============================================================================================
@@ -554,30 +558,14 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(Combine_OR)
 
 #define as_enum(name) name,
-enum logicCardType
-{
-  LIST_CARD_TYPES(as_enum)
-};
-enum logicOperator
-{
-  LIST_OPERATORS(as_enum)
-};
-enum cardMode
-{
-  LIST_MODES(as_enum)
-};
-enum cardState
-{
-  LIST_STATES(as_enum)
-};
-enum combineMode
-{
-  LIST_COMBINE(as_enum)
-};
+enum logicCardType { LIST_CARD_TYPES(as_enum) };
+enum logicOperator { LIST_OPERATORS(as_enum) };
+enum cardMode { LIST_MODES(as_enum) };
+enum cardState { LIST_STATES(as_enum) };
+enum combineMode { LIST_COMBINE(as_enum) };
 #undef as_enum
 
-struct LogicCard
-{
+struct LogicCard {
   // Global unique card ID used by set/reset reference and lookup.
   uint8_t id;
   // Type family of the card (DI, DO, AI, SIO).
@@ -602,19 +590,22 @@ struct LogicCard
   // DO/SIO: repeat count (0 = infinite, 1 = single pulse, N = N full cycles)
   uint32_t setting3;
 
-  // DI: qualified logical state after debounce/qualification when setCondition is true
-  // DO/SIO: mission latch indicating active cycle (set on trigger, cleared on completion/reset)
+  // DI: qualified logical state after debounce/qualification when setCondition
+  // is true DO/SIO: mission latch indicating active cycle (set on trigger,
+  // cleared on completion/reset)
   bool logicalState;
-  // DI: physical input state after polarity adjustment not considering set/reset conditions
-  // DO/SIO: effective output state considering timing and mission state
+  // DI: physical input state after polarity adjustment not considering
+  // set/reset conditions DO/SIO: effective output state considering timing and
+  // mission state
   bool physicalState;
-  // DI: edge-triggered one cycle pulse generated when logicalState transitions to true
-  // DO/SIO: one cycle pulse generated on setCondition rising edge to trigger mission start
+  // DI: edge-triggered one cycle pulse generated when logicalState transitions
+  // to true DO/SIO: one cycle pulse generated on setCondition rising edge to
+  // trigger mission start
   bool triggerFlag;
 
-  // DI: event counter incremented on each qualified edge when setCondition is true
-  // DO/SIO: cycle counter incremented on each physical rising edge to track repeat cycles
-  // Reset to 0 on when reset condition is met for DI/DO/SIO
+  // DI: event counter incremented on each qualified edge when setCondition is
+  // true DO/SIO: cycle counter incremented on each physical rising edge to
+  // track repeat cycles Reset to 0 on when reset condition is met for DI/DO/SIO
   uint32_t currentValue;
   // DI: timestamp of last qualified edge for debounce timing
   // DO/SIO: timestamp when current ON-phase started for timing control
@@ -623,12 +614,14 @@ struct LogicCard
   // DO/SIO: timestamp when current OFF-phase started for timing control
   uint32_t startOffMs;
   // DI: unused for now, reserved for future use (e.g. long-press tracking)
-  // DO/SIO: counts completed cycles for repeat logic to determine when to finish
+  // DO/SIO: counts completed cycles for repeat logic to determine when to
+  // finish
   uint32_t repeatCounter;
 
   // DI: edge/debounce mode (rising, falling, change)
-  // DO/SIO: execution mode switch for timing semantics (DO_Normal/DO_Immediate/DO_Gated)
-  // Legacy mode values are deprecated and kept for schema compatibility only.
+  // DO/SIO: execution mode switch for timing semantics
+  // (DO_Normal/DO_Immediate/DO_Gated) Legacy mode values are deprecated and
+  // kept for schema compatibility only.
   cardMode mode;
   // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
   // DO/SIO: phase state (Idle, OnDelay, Active, Finished)
@@ -657,12 +650,10 @@ struct LogicCard
   combineMode resetCombine;
 };
 
-void setup()
-{
+void setup() {
   // put your setup code here, to run once:
 }
 
-void loop()
-{
+void loop() {
   // put your main code here, to run repeatedly:
 }
