@@ -593,6 +593,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 
 #include <cstring>
 
@@ -614,6 +615,7 @@ const uint8_t DI_START = 0;
 const uint8_t DO_START = DI_START + NUM_DI;
 const uint8_t AI_START = DO_START + NUM_DO;
 const uint8_t SIO_START = AI_START + NUM_AI;
+const char* kConfigPath = "/config.json";
 
 #define LIST_CARD_TYPES(X) \
   X(DigitalInput)          \
@@ -934,28 +936,180 @@ void deserializeCardFromJson(JsonObjectConst json, LogicCard& card) {
 
   card.setA_ID = json["setA_ID"] | card.setA_ID;
   card.setA_Operator =
-      parseOrDefault(json["setA_Operator"] | nullptr, Op_AlwaysTrue);
+      parseOrDefault(json["setA_Operator"] | nullptr, Op_AlwaysFalse);
   card.setA_Threshold = json["setA_Threshold"] | card.setA_Threshold;
   card.setB_ID = json["setB_ID"] | card.setB_ID;
   card.setB_Operator =
-      parseOrDefault(json["setB_Operator"] | nullptr, Op_AlwaysTrue);
+      parseOrDefault(json["setB_Operator"] | nullptr, Op_AlwaysFalse);
   card.setB_Threshold = json["setB_Threshold"] | card.setB_Threshold;
   card.setCombine = parseOrDefault(json["setCombine"] | nullptr, Combine_None);
 
   card.resetA_ID = json["resetA_ID"] | card.resetA_ID;
   card.resetA_Operator =
-      parseOrDefault(json["resetA_Operator"] | nullptr, Op_AlwaysTrue);
+      parseOrDefault(json["resetA_Operator"] | nullptr, Op_AlwaysFalse);
   card.resetA_Threshold = json["resetA_Threshold"] | card.resetA_Threshold;
   card.resetB_ID = json["resetB_ID"] | card.resetB_ID;
   card.resetB_Operator =
-      parseOrDefault(json["resetB_Operator"] | nullptr, Op_AlwaysTrue);
+      parseOrDefault(json["resetB_Operator"] | nullptr, Op_AlwaysFalse);
   card.resetB_Threshold = json["resetB_Threshold"] | card.resetB_Threshold;
   card.resetCombine =
       parseOrDefault(json["resetCombine"] | nullptr, Combine_None);
 }
 
+void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
+  card.id = globalId;
+  card.invert = false;
+  card.setting1 = 0;
+  card.setting2 = 0;
+  card.setting3 = 0;
+  card.logicalState = false;
+  card.physicalState = false;
+  card.triggerFlag = false;
+  card.currentValue = 0;
+  card.startOnMs = 0;
+  card.startOffMs = 0;
+  card.repeatCounter = 0;
+
+  card.setA_ID = 0;
+  card.setB_ID = 0;
+  card.resetA_ID = 0;
+  card.resetB_ID = 0;
+  card.setA_Operator = Op_AlwaysFalse;
+  card.setB_Operator = Op_AlwaysFalse;
+  card.resetA_Operator = Op_AlwaysFalse;
+  card.resetB_Operator = Op_AlwaysFalse;
+  card.setA_Threshold = 0;
+  card.setB_Threshold = 0;
+  card.resetA_Threshold = 0;
+  card.resetB_Threshold = 0;
+  card.setCombine = Combine_None;
+  card.resetCombine = Combine_None;
+
+  if (globalId < DO_START) {
+    card.type = DigitalInput;
+    card.index = globalId - DI_START;
+    card.hwPin = DI_Pins[card.index];
+    card.mode = Mode_None;
+    card.state = State_DI_Idle;
+    return;
+  }
+
+  if (globalId < AI_START) {
+    card.type = DigitalOutput;
+    card.index = globalId - DO_START;
+    card.hwPin = DO_Pins[card.index];
+    card.mode = Mode_DO_Normal;
+    card.state = State_DO_Idle;
+    return;
+  }
+
+  if (globalId < SIO_START) {
+    card.type = AnalogInput;
+    card.index = globalId - AI_START;
+    card.hwPin = AI_Pins[card.index];
+    card.mode = Mode_AI_Continuous;
+    card.state = State_AI_Streaming;
+    return;
+  }
+
+  card.type = SoftIO;
+  card.index = globalId - SIO_START;
+  card.hwPin = SIO_Pins[card.index];
+  card.mode = Mode_DO_Normal;
+  card.state = State_DO_Idle;
+}
+
+void initializeAllCardsSafeDefaults() {
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    initializeCardSafeDefaults(logicCards[i], i);
+  }
+}
+
+bool saveLogicCardsToLittleFS() {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonObject obj = array.add<JsonObject>();
+    serializeCardToJson(logicCards[i], obj);
+  }
+
+  File file = LittleFS.open(kConfigPath, "w");
+  if (!file) return false;
+  size_t written = serializeJson(doc, file);
+  file.close();
+  return written > 0;
+}
+
+bool loadLogicCardsFromLittleFS() {
+  File file = LittleFS.open(kConfigPath, "r");
+  if (!file) return false;
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  if (error) return false;
+  if (!doc.is<JsonArray>()) return false;
+
+  JsonArrayConst array = doc.as<JsonArrayConst>();
+  if (array.size() != TOTAL_CARDS) return false;
+
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonVariantConst item = array[i];
+    if (!item.is<JsonObjectConst>()) return false;
+    deserializeCardFromJson(item.as<JsonObjectConst>(), logicCards[i]);
+  }
+  return true;
+}
+
+void printLogicCardsJsonToSerial(const char* label) {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonObject obj = array.add<JsonObject>();
+    serializeCardToJson(logicCards[i], obj);
+  }
+
+  Serial.println(label);
+  serializeJsonPretty(doc, Serial);
+  Serial.println();
+}
+
+void configureHardwarePinsSafeState() {
+  for (uint8_t i = 0; i < NUM_DO; ++i) {
+    pinMode(DO_Pins[i], OUTPUT);
+    digitalWrite(DO_Pins[i], LOW);
+  }
+  for (uint8_t i = 0; i < NUM_DI; ++i) {
+    pinMode(DI_Pins[i], INPUT_PULLUP);
+  }
+}
+
+void bootstrapCardsFromStorage() {
+  initializeAllCardsSafeDefaults();
+  if (loadLogicCardsFromLittleFS()) {
+    printLogicCardsJsonToSerial("Loaded JSON from /config.json:");
+    return;
+  }
+
+  initializeAllCardsSafeDefaults();
+  if (saveLogicCardsToLittleFS()) {
+    printLogicCardsJsonToSerial("Saved default JSON to /config.json:");
+  } else {
+    Serial.println("Failed to save default JSON to /config.json");
+  }
+}
+
 void setup() {
-  // put your setup code here, to run once:
+  Serial.begin(115200);
+  configureHardwarePinsSafeState();
+
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+    initializeAllCardsSafeDefaults();
+    return;
+  }
+
+  bootstrapCardsFromStorage();
 }
 
 void loop() {
