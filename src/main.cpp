@@ -113,6 +113,10 @@
  * - currentValue
  * - state
  * - timing registers (startOnMs, startOffMs, repeatCounter)
+ * Compatibility note:
+ * - AI uses the same persisted keys (setting1/setting2/setting3,
+ *   startOnMs/startOffMs, currentValue).
+ * - This phase does not require a schema migration.
  *
  *
  * ============================================================================================
@@ -231,6 +235,10 @@
  * Legacy mode values:
  * - Retained for schema compatibility only.
  * - Deprecated for new DO/SIO configurations.
+ * AI Placeholder Mode:
+ * Mode_AI_Continuous
+ * - Placeholder semantic tag for future AI runtime implementation.
+ * - No additional runtime behavior is introduced in this phase.
  *
  *
  * 3.4 cardState
@@ -244,6 +252,11 @@
  * State_DO_OnDelay
  * State_DO_Active
  * State_DO_Finished
+ *
+ * AI Placeholder State:
+ * State_AI_Streaming
+ * - Placeholder semantic tag for future AI runtime implementation.
+ * - AI does not use a phase-machine in this phase.
  *
  *
  * 3.5 logicCombine
@@ -277,9 +290,11 @@
  *
  * setting1 → DO/SIO: ON delay / pulse-high duration
  *            DI:     debounce window
+ *            AI:     input minimum (raw ADC/sensor lower bound)
  *
  * setting2 → DO/SIO: OFF delay / inter-cycle rest
  *            DI:     reserved
+ *            AI:     input maximum (raw ADC/sensor upper bound)
  *
  * setting3 → DO/SIO: repeat count
  *                 0     = infinite
@@ -287,6 +302,7 @@
  *                 >1    = exactly N full cycles
  *            DI:     extra parameter / future use (e.g. filter samples,
  * long-press threshold…)
+ *            AI:     EMA alpha in fixed range 0..1000 (0.0..1.0)
  *
  *
  * Core Runtime Signals:
@@ -306,12 +322,16 @@
  *
  * currentValue → DI: event counter
  *                DO/SIO: cycle counter (increments on physical rising edge)
+ *                AI: EMA accumulator and filtered output value
  *
- * startOnMs → Timestamp when current ON-phase began
+ * startOnMs -> Timestamp when current ON-phase began
+ *             AI: output minimum (scaled physical lower bound)
  *
- * startOffMs → Timestamp when current OFF-phase began
+ * startOffMs -> Timestamp when current OFF-phase began
+ *              AI: output maximum (scaled physical upper bound)
  *
- * repeatCounter → DO/SIO: counts completed cycles for repeat logic
+ * repeatCounter -> DO/SIO: counts completed cycles for repeat logic
+ *                 AI: unused placeholder in this phase
  *
  *
  * Mode & State:
@@ -320,9 +340,11 @@
  *        DO/SIO: execution engine switch
  *                DO_Normal, DO_Immediate, DO_Gated
  *                (legacy mode values are compatibility-only)
+ *        AI: placeholder mode tag (Mode_AI_Continuous)
  *
  * state → DI: filtering lifecycle state
  *         DO/SIO: phase state (Idle, OnDelay, Active, Finished)
+ *         AI: placeholder state tag (State_AI_Streaming)
  *
  *
  * SET Group Fields:
@@ -382,6 +404,8 @@
  * - Cards evaluated later in the same scan see already-updated runtime values
  *   of cards evaluated earlier in that scan.
  * - Cards evaluated earlier see later-card changes only on the next scan.
+ * - Because AI is evaluated before SIO/DO, downstream cards in the same scan
+ *   cycle consume AI values updated in that same cycle.
  *
  * Determinism requirement:
  * - Scan order must remain fixed and predictable for repeatable behavior.
@@ -472,9 +496,48 @@
  *
  *
  * ============================================================================================
- * 8) SYSTEM IDENTITY
+ * 8) ANALOG INPUT (AI) CONTRACT
  * ============================================================================================
  *
+ * AI philosophy:
+ * - AI cards are pure sensor transducers.
+ * - AI is stateless except for EMA accumulation in currentValue.
+ * - AI is evaluated every scan tick in deterministic order.
+ * - AI is not mission-driven, event-triggered, latched, or phase-based.
+ *
+ * AI per-scan deterministic pipeline:
+ * 1) Sample: read raw analog value from card hwPin.
+ * 2) Clamp: constrain raw sample to [setting1, setting2].
+ * 3) Scale: map clamped value linearly from input range to output range
+ *    [startOnMs, startOffMs].
+ * 4) Filter: apply EMA using setting3 alpha (0..1000 => 0.0..1.0).
+ * 5) Store: write filtered result to currentValue for downstream consumption.
+ *
+ * AI gating and reset behavior:
+ * - AI processing is never gated by setCondition or resetCondition.
+ * - AI processing is never paused by set/reset groups.
+ * - set/reset fields are schema placeholders for AI in this phase.
+ *
+ * AI range behavior:
+ * - Raw input below setting1 clips to setting1.
+ * - Raw input above setting2 clips to setting2.
+ * - Values in range are linearly interpolated to [startOnMs, startOffMs].
+ * - Directionality comes from endpoint assignment; no invert flag is required.
+ *
+ * AI numeric domain:
+ * - All AI numeric parameters are non-negative unsigned values.
+ * - No negative ranges or negative accumulator states are supported.
+ *
+ * AI fixed-point convention:
+ * - AI values remain integer-only in firmware.
+ * - Fractional engineering units are represented by external fixed-point
+ *   convention (value/divisor).
+ * - Divisor source is external configuration/UI convention; no new per-card
+ *   divisor field is introduced in this phase.
+ *
+ * ============================================================================================
+ * 9) SYSTEM IDENTITY
+ * ============================================================================================
  * This system is:
  *
  * A configurable automation kernel.
@@ -532,13 +595,14 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(Op_Finished)          \
   X(Op_Stopped)
 
-#define LIST_MODES(X)  \
-  X(Mode_None)         \
-  X(Mode_DI_Rising)    \
-  X(Mode_DI_Falling)   \
-  X(Mode_DI_Change)    \
-  X(Mode_DO_Normal)    \
-  X(Mode_DO_Immediate) \
+#define LIST_MODES(X)   \
+  X(Mode_None)          \
+  X(Mode_DI_Rising)     \
+  X(Mode_DI_Falling)    \
+  X(Mode_DI_Change)     \
+  X(Mode_AI_Continuous) \
+  X(Mode_DO_Normal)     \
+  X(Mode_DO_Immediate)  \
   X(Mode_DO_Gated)
 
 #define LIST_STATES(X)  \
@@ -547,6 +611,7 @@ const uint8_t SIO_START = AI_START + NUM_AI;
   X(State_DI_Filtering) \
   X(State_DI_Qualified) \
   X(State_DI_Inhibited) \
+  X(State_AI_Streaming) \
   X(State_DO_Idle)      \
   X(State_DO_OnDelay)   \
   X(State_DO_Active)    \
@@ -581,50 +646,62 @@ struct LogicCard {
   // DI: debounce duration for DI
   // DO/SIO: on-delay duration (wait before activating output)
   // For DO/SIO 0 means infinite wait to on delay until reset
+  // AI: input minimum (raw ADC/sensor lower bound)
   uint32_t setting1;
   // DI: reserved for future use
   // DO/SIO: off-delay duration (turn off output after interval ends)
   // For DO/SIO 0 means infinite wait to off delay until reset
+  // AI: input maximum (raw ADC/sensor upper bound)
   uint32_t setting2;
   // DI: reserved for future use
   // DO/SIO: repeat count (0 = infinite, 1 = single pulse, N = N full cycles)
+  // AI: EMA alpha in range 0..1000 (represents 0.0..1.0)
   uint32_t setting3;
 
   // DI: qualified logical state after debounce/qualification when setCondition
   // is true DO/SIO: mission latch indicating active cycle (set on trigger,
   // cleared on completion/reset)
+  // AI: unused placeholder in this phase
   bool logicalState;
   // DI: physical input state after polarity adjustment not considering
   // set/reset conditions DO/SIO: effective output state considering timing and
   // mission state
+  // AI: unused placeholder in this phase
   bool physicalState;
   // DI: edge-triggered one cycle pulse generated when logicalState transitions
   // to true DO/SIO: one cycle pulse generated on setCondition rising edge to
   // trigger mission start
+  // AI: unused placeholder in this phase
   bool triggerFlag;
 
   // DI: event counter incremented on each qualified edge when setCondition is
   // true DO/SIO: cycle counter incremented on each physical rising edge to
   // track repeat cycles Reset to 0 on when reset condition is met for DI/DO/SIO
+  // AI: EMA accumulator and filtered output storage
   uint32_t currentValue;
   // DI: timestamp of last qualified edge for debounce timing
   // DO/SIO: timestamp when current ON-phase started for timing control
+  // AI: output minimum (scaled physical lower bound)
   uint32_t startOnMs;
   // DI: timestamp of last qualified edge for debounce timing
   // DO/SIO: timestamp when current OFF-phase started for timing control
+  // AI: output maximum (scaled physical upper bound)
   uint32_t startOffMs;
   // DI: unused for now, reserved for future use (e.g. long-press tracking)
   // DO/SIO: counts completed cycles for repeat logic to determine when to
   // finish
+  // AI: unused placeholder in this phase
   uint32_t repeatCounter;
 
   // DI: edge/debounce mode (rising, falling, change)
   // DO/SIO: execution mode switch for timing semantics
   // (DO_Normal/DO_Immediate/DO_Gated) Legacy mode values are deprecated and
   // kept for schema compatibility only.
+  // AI: placeholder mode tag (Mode_AI_Continuous), no runtime effect yet
   cardMode mode;
   // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
   // DO/SIO: phase state (Idle, OnDelay, Active, Finished)
+  // AI: placeholder state tag (State_AI_Streaming), no phase machine
   cardState state;
 
   // SET Group
