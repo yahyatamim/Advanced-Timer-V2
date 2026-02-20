@@ -592,6 +592,9 @@
  **********************************************************************************************/
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
+
+#include <cstring>
 
 const uint8_t DI_Pins[] = {13, 12, 14, 27};  // Digital Input pins
 const uint8_t DO_Pins[] = {26, 25, 33, 32};  // Digital Output pins
@@ -671,6 +674,104 @@ enum cardMode { LIST_MODES(as_enum) };
 enum cardState { LIST_STATES(as_enum) };
 enum combineMode { LIST_COMBINE(as_enum) };
 #undef as_enum
+
+#define ENUM_TO_STRING_CASE(name) \
+  case name:                      \
+    return #name;
+
+#define ENUM_TRY_PARSE_IF(name) \
+  if (strcmp(s, #name) == 0) {  \
+    out = name;                 \
+    return true;                \
+  }
+
+const char* toString(logicCardType value) {
+  switch (value) { LIST_CARD_TYPES(ENUM_TO_STRING_CASE) }
+  return "DigitalInput";
+}
+
+const char* toString(logicOperator value) {
+  switch (value) { LIST_OPERATORS(ENUM_TO_STRING_CASE) }
+  return "Op_AlwaysTrue";
+}
+
+const char* toString(cardMode value) {
+  switch (value) { LIST_MODES(ENUM_TO_STRING_CASE) }
+  return "Mode_None";
+}
+
+const char* toString(cardState value) {
+  switch (value) { LIST_STATES(ENUM_TO_STRING_CASE) }
+  return "State_None";
+}
+
+const char* toString(combineMode value) {
+  switch (value) { LIST_COMBINE(ENUM_TO_STRING_CASE) }
+  return "Combine_None";
+}
+
+bool tryParseLogicCardType(const char* s, logicCardType& out) {
+  if (s == nullptr) return false;
+  LIST_CARD_TYPES(ENUM_TRY_PARSE_IF)
+  return false;
+}
+
+bool tryParseLogicOperator(const char* s, logicOperator& out) {
+  if (s == nullptr) return false;
+  LIST_OPERATORS(ENUM_TRY_PARSE_IF)
+  return false;
+}
+
+bool tryParseCardMode(const char* s, cardMode& out) {
+  if (s == nullptr) return false;
+  LIST_MODES(ENUM_TRY_PARSE_IF)
+  return false;
+}
+
+bool tryParseCardState(const char* s, cardState& out) {
+  if (s == nullptr) return false;
+  LIST_STATES(ENUM_TRY_PARSE_IF)
+  return false;
+}
+
+bool tryParseCombineMode(const char* s, combineMode& out) {
+  if (s == nullptr) return false;
+  LIST_COMBINE(ENUM_TRY_PARSE_IF)
+  return false;
+}
+
+logicCardType parseOrDefault(const char* s, logicCardType fallback) {
+  logicCardType value = fallback;
+  if (tryParseLogicCardType(s, value)) return value;
+  return fallback;
+}
+
+logicOperator parseOrDefault(const char* s, logicOperator fallback) {
+  logicOperator value = fallback;
+  if (tryParseLogicOperator(s, value)) return value;
+  return fallback;
+}
+
+cardMode parseOrDefault(const char* s, cardMode fallback) {
+  cardMode value = fallback;
+  if (tryParseCardMode(s, value)) return value;
+  return fallback;
+}
+
+cardState parseOrDefault(const char* s, cardState fallback) {
+  cardState value = fallback;
+  if (tryParseCardState(s, value)) return value;
+  return fallback;
+}
+
+combineMode parseOrDefault(const char* s, combineMode fallback) {
+  combineMode value = fallback;
+  if (tryParseCombineMode(s, value)) return value;
+  return fallback;
+}
+
+#undef ENUM_TO_STRING_CASE
+#undef ENUM_TRY_PARSE_IF
 
 struct LogicCard {
   // Global unique card ID used by set/reset reference and lookup.
@@ -768,6 +869,90 @@ struct LogicCard {
 
   combineMode resetCombine;
 };
+LogicCard logicCards[TOTAL_CARDS] = {};
+
+void serializeCardToJson(const LogicCard& card, JsonObject& json) {
+  json["id"] = card.id;
+  json["type"] = toString(card.type);
+  json["index"] = card.index;
+  json["hwPin"] = card.hwPin;
+  json["invert"] = card.invert;
+
+  json["setting1"] = card.setting1;
+  json["setting2"] = card.setting2;
+  json["setting3"] = card.setting3;
+
+  json["logicalState"] = card.logicalState;
+  json["physicalState"] = card.physicalState;
+  json["triggerFlag"] = card.triggerFlag;
+  json["currentValue"] = card.currentValue;
+  json["startOnMs"] = card.startOnMs;
+  json["startOffMs"] = card.startOffMs;
+  json["repeatCounter"] = card.repeatCounter;
+
+  json["mode"] = toString(card.mode);
+  json["state"] = toString(card.state);
+
+  json["setA_ID"] = card.setA_ID;
+  json["setA_Operator"] = toString(card.setA_Operator);
+  json["setA_Threshold"] = card.setA_Threshold;
+  json["setB_ID"] = card.setB_ID;
+  json["setB_Operator"] = toString(card.setB_Operator);
+  json["setB_Threshold"] = card.setB_Threshold;
+  json["setCombine"] = toString(card.setCombine);
+
+  json["resetA_ID"] = card.resetA_ID;
+  json["resetA_Operator"] = toString(card.resetA_Operator);
+  json["resetA_Threshold"] = card.resetA_Threshold;
+  json["resetB_ID"] = card.resetB_ID;
+  json["resetB_Operator"] = toString(card.resetB_Operator);
+  json["resetB_Threshold"] = card.resetB_Threshold;
+  json["resetCombine"] = toString(card.resetCombine);
+}
+
+void deserializeCardFromJson(JsonObjectConst json, LogicCard& card) {
+  card.id = json["id"] | card.id;
+  card.type = parseOrDefault(json["type"] | nullptr, DigitalInput);
+  card.index = json["index"] | card.index;
+  card.hwPin = json["hwPin"] | card.hwPin;
+  card.invert = json["invert"] | card.invert;
+
+  card.setting1 = json["setting1"] | card.setting1;
+  card.setting2 = json["setting2"] | card.setting2;
+  card.setting3 = json["setting3"] | card.setting3;
+
+  card.logicalState = json["logicalState"] | card.logicalState;
+  card.physicalState = json["physicalState"] | card.physicalState;
+  card.triggerFlag = json["triggerFlag"] | card.triggerFlag;
+  card.currentValue = json["currentValue"] | card.currentValue;
+  card.startOnMs = json["startOnMs"] | card.startOnMs;
+  card.startOffMs = json["startOffMs"] | card.startOffMs;
+  card.repeatCounter = json["repeatCounter"] | card.repeatCounter;
+
+  card.mode = parseOrDefault(json["mode"] | nullptr, Mode_None);
+  card.state = parseOrDefault(json["state"] | nullptr, State_None);
+
+  card.setA_ID = json["setA_ID"] | card.setA_ID;
+  card.setA_Operator =
+      parseOrDefault(json["setA_Operator"] | nullptr, Op_AlwaysTrue);
+  card.setA_Threshold = json["setA_Threshold"] | card.setA_Threshold;
+  card.setB_ID = json["setB_ID"] | card.setB_ID;
+  card.setB_Operator =
+      parseOrDefault(json["setB_Operator"] | nullptr, Op_AlwaysTrue);
+  card.setB_Threshold = json["setB_Threshold"] | card.setB_Threshold;
+  card.setCombine = parseOrDefault(json["setCombine"] | nullptr, Combine_None);
+
+  card.resetA_ID = json["resetA_ID"] | card.resetA_ID;
+  card.resetA_Operator =
+      parseOrDefault(json["resetA_Operator"] | nullptr, Op_AlwaysTrue);
+  card.resetA_Threshold = json["resetA_Threshold"] | card.resetA_Threshold;
+  card.resetB_ID = json["resetB_ID"] | card.resetB_ID;
+  card.resetB_Operator =
+      parseOrDefault(json["resetB_Operator"] | nullptr, Op_AlwaysTrue);
+  card.resetB_Threshold = json["resetB_Threshold"] | card.resetB_Threshold;
+  card.resetCombine =
+      parseOrDefault(json["resetCombine"] | nullptr, Combine_None);
+}
 
 void setup() {
   // put your setup code here, to run once:
