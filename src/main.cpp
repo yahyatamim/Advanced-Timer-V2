@@ -557,11 +557,17 @@
 
 #include <Arduino.h>
 
+const uint8_t DI_Pins[] = {13, 12, 14, 27};  // Digital Input pins
+const uint8_t DO_Pins[] = {26, 25, 33, 32};  // Digital Output pins
+const uint8_t AI_Pins[] = {35, 34};          // Analog Input pins
+const uint8_t SIO_Pins[] = {255, 255, 255, 255};
+// SoftIO has no physical pins, so we can use 255 as a placeholder for "virtual"
+
 // --- Card counts (can be changed later) ---
-const uint8_t NUM_DI = 4;
-const uint8_t NUM_DO = 4;
-const uint8_t NUM_AI = 2;
-const uint8_t NUM_SIO = 4;
+const uint8_t NUM_DI = sizeof(DI_Pins) / sizeof(DI_Pins[0]);
+const uint8_t NUM_DO = sizeof(DO_Pins) / sizeof(DO_Pins[0]);
+const uint8_t NUM_AI = sizeof(AI_Pins) / sizeof(AI_Pins[0]);
+const uint8_t NUM_SIO = sizeof(SIO_Pins) / sizeof(SIO_Pins[0]);
 
 const uint8_t TOTAL_CARDS = NUM_DI + NUM_DO + NUM_AI + NUM_SIO;
 
@@ -569,10 +575,6 @@ const uint8_t DI_START = 0;
 const uint8_t DO_START = DI_START + NUM_DI;
 const uint8_t AI_START = DO_START + NUM_DO;
 const uint8_t SIO_START = AI_START + NUM_AI;
-
-const uint8_t DI_Pins[NUM_DI] = {13, 12, 14, 27};  // Digital Input pins
-const uint8_t DO_Pins[NUM_DO] = {26, 25, 33, 32};  // Digital Output pins
-const uint8_t AI_Pins[NUM_AI] = {35, 34};          // Analog Input pins
 
 #define LIST_CARD_TYPES(X) \
   X(DigitalInput)          \
