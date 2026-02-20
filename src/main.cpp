@@ -116,6 +116,8 @@
  * Compatibility note:
  * - AI uses the same persisted keys (setting1/setting2/setting3,
  *   startOnMs/startOffMs, currentValue).
+ * - Key names are unchanged; numeric unit meaning follows Section 10
+ *   fixed-point centiunit rules.
  * - This phase does not require a schema migration.
  *
  *
@@ -286,7 +288,7 @@
  *          false = Active High / normal polarity
  *
  *
- * Timing Parameters (all in milliseconds):
+ * Timing Parameters (fixed-point centiunits unless explicitly noted):
  *
  * setting1 → DO/SIO: ON delay / pulse-high duration
  *            DI:     debounce window
@@ -529,11 +531,7 @@
  * - No negative ranges or negative accumulator states are supported.
  *
  * AI fixed-point convention:
- * - AI values remain integer-only in firmware.
- * - Fractional engineering units are represented by external fixed-point
- *   convention (value/divisor).
- * - Divisor source is external configuration/UI convention; no new per-card
- *   divisor field is introduced in this phase.
+ * - AI numeric/storage conventions are defined by Section 10.
  *
  * ============================================================================================
  * 9) SYSTEM IDENTITY
@@ -552,6 +550,44 @@
  *
  * From hardcoded firmware
  * → To behavior-defined automation.
+ *
+ *
+ * ============================================================================================
+ * 10) FIXED-POINT DECIMAL CONVENTION (2 DECIMAL PLACES)
+ * ============================================================================================
+ *
+ * Core rule:
+ * - Values requiring decimals are stored as uint32_t centiunits (value x 100).
+ * - JSON numeric storage in this phase uses integer centiunits.
+ *
+ * Conversion:
+ * - display = stored / 100
+ * - stored = round_half_away(display * 100)
+ *
+ * Field scope (minimal):
+ * | Field(s) | Contract |
+ * | --- | --- |
+ * | setting1, setting2 | DI/DO/SIO timing + AI input range -> centiunits |
+ * | startOnMs, startOffMs | AI scaling endpoints -> centiunits |
+ * | setA_Threshold, setB_Threshold, resetA_Threshold, resetB_Threshold |
+ * Numeric condition thresholds -> centiunits | | setting3 (DO/SIO, DI) |
+ * Integer repeat/reserved (not centiunits) | | setting3 (AI) | Alpha in
+ * milliunits 0..1000 (not centiunits) | | currentValue | AI -> centiunits;
+ * DI/DO/SIO -> integer counters |
+ *
+ * AI scaling (centiunit arithmetic):
+ * - scaled = startOnMs + (clamped - setting1) * (startOffMs - startOnMs) /
+ *   (setting2 - setting1)
+ *
+ * Constraints:
+ * - Numeric domain is non-negative unsigned.
+ * - AI input bounds: setting1 <= setting2.
+ * - AI output endpoints may be increasing or decreasing
+ *   (startOnMs may be < or > startOffMs).
+ *
+ * Migration note (future work):
+ * - Legacy millisecond/unitless configs require schema-versioned migration in
+ *   a later phase; not defined here.
  *
  **********************************************************************************************/
 
