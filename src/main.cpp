@@ -616,6 +616,19 @@ const uint8_t DO_START = DI_START + NUM_DI;
 const uint8_t AI_START = DO_START + NUM_DO;
 const uint8_t SIO_START = AI_START + NUM_AI;
 const char* kConfigPath = "/config.json";
+const uint32_t SCAN_INTERVAL_MS = 10;
+
+#ifndef LOGIC_ENGINE_DEBUG
+#define LOGIC_ENGINE_DEBUG 0
+#endif
+
+#if LOGIC_ENGINE_DEBUG
+#define LOGIC_DEBUG_PRINTLN(x) Serial.println(x)
+#else
+#define LOGIC_DEBUG_PRINTLN(x) \
+  do {                         \
+  } while (0)
+#endif
 
 #define LIST_CARD_TYPES(X) \
   X(DigitalInput)          \
@@ -872,6 +885,9 @@ struct LogicCard {
   combineMode resetCombine;
 };
 LogicCard logicCards[TOTAL_CARDS] = {};
+bool gPrevSetCondition[TOTAL_CARDS] = {};
+bool gPrevDISample[TOTAL_CARDS] = {};
+bool gPrevDIPrimed[TOTAL_CARDS] = {};
 
 void serializeCardToJson(const LogicCard& card, JsonObject& json) {
   json["id"] = card.id;
@@ -1099,6 +1115,326 @@ void bootstrapCardsFromStorage() {
   }
 }
 
+LogicCard* getCardById(uint8_t id) {
+  if (id >= TOTAL_CARDS) return nullptr;
+  return &logicCards[id];
+}
+
+bool isDoRunningState(cardState state) {
+  return state == State_DO_OnDelay || state == State_DO_Active;
+}
+
+bool evalOperator(const LogicCard& target, logicOperator op,
+                  uint32_t threshold) {
+  switch (op) {
+    case Op_AlwaysTrue:
+      return true;
+    case Op_AlwaysFalse:
+      return false;
+    case Op_LogicalTrue:
+      return target.logicalState;
+    case Op_LogicalFalse:
+      return !target.logicalState;
+    case Op_PhysicalOn:
+      return target.physicalState;
+    case Op_PhysicalOff:
+      return !target.physicalState;
+    case Op_Triggered:
+      return target.triggerFlag;
+    case Op_TriggerCleared:
+      return !target.triggerFlag;
+    case Op_GT:
+      return target.currentValue > threshold;
+    case Op_LT:
+      return target.currentValue < threshold;
+    case Op_EQ:
+      return target.currentValue == threshold;
+    case Op_NEQ:
+      return target.currentValue != threshold;
+    case Op_GTE:
+      return target.currentValue >= threshold;
+    case Op_LTE:
+      return target.currentValue <= threshold;
+    case Op_Running:
+      return isDoRunningState(target.state);
+    case Op_Finished:
+      return target.state == State_DO_Finished;
+    case Op_Stopped:
+      return target.state == State_DO_Idle || target.state == State_DO_Finished;
+    default:
+      return false;
+  }
+}
+
+bool evalCondition(uint8_t aId, logicOperator aOp, uint32_t aTh, uint8_t bId,
+                   logicOperator bOp, uint32_t bTh, combineMode combine) {
+  const LogicCard* aCard = getCardById(aId);
+  bool aResult = (aCard != nullptr) ? evalOperator(*aCard, aOp, aTh) : false;
+  if (combine == Combine_None) return aResult;
+
+  const LogicCard* bCard = getCardById(bId);
+  bool bResult = (bCard != nullptr) ? evalOperator(*bCard, bOp, bTh) : false;
+
+  if (combine == Combine_AND) return aResult && bResult;
+  if (combine == Combine_OR) return aResult || bResult;
+  return false;
+}
+
+void resetDIRuntime(LogicCard& card) {
+  card.logicalState = false;
+  card.triggerFlag = false;
+  card.currentValue = 0;
+  card.startOnMs = 0;
+  card.startOffMs = 0;
+  card.repeatCounter = 0;
+}
+
+void processDICard(LogicCard& card, uint32_t nowMs) {
+  bool sample = false;
+  if (card.hwPin != 255) {
+    sample = (digitalRead(card.hwPin) == HIGH);
+  }
+  if (card.invert) sample = !sample;
+  card.physicalState = sample;
+
+  const bool setCondition = evalCondition(
+      card.setA_ID, card.setA_Operator, card.setA_Threshold, card.setB_ID,
+      card.setB_Operator, card.setB_Threshold, card.setCombine);
+  const bool resetCondition =
+      evalCondition(card.resetA_ID, card.resetA_Operator, card.resetA_Threshold,
+                    card.resetB_ID, card.resetB_Operator, card.resetB_Threshold,
+                    card.resetCombine);
+
+  if (resetCondition) {
+    resetDIRuntime(card);
+    card.state = State_DI_Inhibited;
+    return;
+  }
+
+  if (!setCondition) {
+    card.triggerFlag = false;
+    card.state = State_DI_Idle;
+    return;
+  }
+
+  bool previousSample = sample;
+  if (card.id < TOTAL_CARDS) {
+    if (gPrevDIPrimed[card.id]) {
+      previousSample = gPrevDISample[card.id];
+    }
+    gPrevDISample[card.id] = sample;
+    gPrevDIPrimed[card.id] = true;
+  }
+
+  const bool risingEdge = (!previousSample && sample);
+  const bool fallingEdge = (previousSample && !sample);
+  bool edgeMatchesMode = false;
+  switch (card.mode) {
+    case Mode_DI_Rising:
+      edgeMatchesMode = risingEdge;
+      break;
+    case Mode_DI_Falling:
+      edgeMatchesMode = fallingEdge;
+      break;
+    case Mode_DI_Change:
+      edgeMatchesMode = risingEdge || fallingEdge;
+      break;
+    default:
+      edgeMatchesMode = false;
+      break;
+  }
+
+  if (!edgeMatchesMode) {
+    card.triggerFlag = false;
+    card.state = State_DI_Idle;
+    return;
+  }
+
+  const uint32_t elapsed = nowMs - card.startOnMs;
+  if (card.setting1 > 0 && elapsed < card.setting1) {
+    card.triggerFlag = false;
+    card.state = State_DI_Filtering;
+    return;
+  }
+
+  card.triggerFlag = true;
+  card.currentValue += 1;
+  card.logicalState = sample;
+  card.startOnMs = nowMs;
+  card.state = State_DI_Qualified;
+}
+
+uint32_t clampUInt32(uint32_t value, uint32_t lo, uint32_t hi) {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+
+void processAICard(LogicCard& card) {
+  uint32_t raw = 0;
+  if (card.hwPin != 255) {
+    raw = static_cast<uint32_t>(analogRead(card.hwPin));
+  }
+
+  const uint32_t inMin =
+      (card.setting1 < card.setting2) ? card.setting1 : card.setting2;
+  const uint32_t inMax =
+      (card.setting1 < card.setting2) ? card.setting2 : card.setting1;
+  const uint32_t clamped = clampUInt32(raw, inMin, inMax);
+
+  uint32_t scaled = card.startOnMs;
+  if (inMax != inMin) {
+    const int64_t outMin = static_cast<int64_t>(card.startOnMs);
+    const int64_t outMax = static_cast<int64_t>(card.startOffMs);
+    const int64_t outDelta = outMax - outMin;
+    const int64_t inDelta = static_cast<int64_t>(inMax - inMin);
+    const int64_t inOffset = static_cast<int64_t>(clamped - inMin);
+    int64_t mapped = outMin + ((inOffset * outDelta) / inDelta);
+    if (mapped < 0) mapped = 0;
+    scaled = static_cast<uint32_t>(mapped);
+  }
+
+  const uint32_t alpha = (card.setting3 > 1000) ? 1000 : card.setting3;
+  const uint64_t filtered =
+      ((static_cast<uint64_t>(alpha) * scaled) +
+       (static_cast<uint64_t>(1000 - alpha) * card.currentValue)) /
+      1000ULL;
+  card.currentValue = static_cast<uint32_t>(filtered);
+  card.mode = Mode_AI_Continuous;
+  card.state = State_AI_Streaming;
+}
+
+void forceDOIdle(LogicCard& card) {
+  card.logicalState = false;
+  card.physicalState = false;
+  card.triggerFlag = false;
+  card.startOnMs = 0;
+  card.startOffMs = 0;
+  card.repeatCounter = 0;
+  card.state = State_DO_Idle;
+}
+
+void driveDOHardware(const LogicCard& card, bool driveHardware, bool level) {
+  if (!driveHardware) return;
+  if (card.hwPin == 255) return;
+  digitalWrite(card.hwPin, level ? HIGH : LOW);
+}
+
+void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
+  const bool setCondition = evalCondition(
+      card.setA_ID, card.setA_Operator, card.setA_Threshold, card.setB_ID,
+      card.setB_Operator, card.setB_Threshold, card.setCombine);
+  const bool resetCondition =
+      evalCondition(card.resetA_ID, card.resetA_Operator, card.resetA_Threshold,
+                    card.resetB_ID, card.resetB_Operator, card.resetB_Threshold,
+                    card.resetCombine);
+
+  bool prevSet = false;
+  if (card.id < TOTAL_CARDS) {
+    prevSet = gPrevSetCondition[card.id];
+    gPrevSetCondition[card.id] = setCondition;
+  }
+  const bool setRisingEdge = setCondition && !prevSet;
+
+  if (resetCondition) {
+    forceDOIdle(card);
+    driveDOHardware(card, driveHardware, false);
+    return;
+  }
+
+  const bool retriggerable =
+      (card.state == State_DO_Idle || card.state == State_DO_Finished);
+  card.triggerFlag = setRisingEdge && retriggerable;
+
+  if (card.triggerFlag) {
+    card.logicalState = true;
+    card.repeatCounter = 0;
+    if (card.mode == Mode_DO_Immediate) {
+      card.state = State_DO_Active;
+      card.startOffMs = nowMs;
+    } else {
+      card.state = State_DO_OnDelay;
+      card.startOnMs = nowMs;
+    }
+  }
+
+  if (card.mode == Mode_DO_Gated && isDoRunningState(card.state) &&
+      !setCondition) {
+    forceDOIdle(card);
+    driveDOHardware(card, driveHardware, false);
+    return;
+  }
+
+  bool effectiveOutput = false;
+  switch (card.state) {
+    case State_DO_OnDelay: {
+      effectiveOutput = false;
+      if (card.setting1 == 0) {
+        break;
+      }
+      if ((nowMs - card.startOnMs) >= card.setting1) {
+        card.state = State_DO_Active;
+        card.startOffMs = nowMs;
+        effectiveOutput = true;
+      }
+      break;
+    }
+    case State_DO_Active: {
+      effectiveOutput = true;
+      if (card.setting2 == 0) {
+        break;
+      }
+      if ((nowMs - card.startOffMs) >= card.setting2) {
+        card.repeatCounter += 1;
+        effectiveOutput = false;
+
+        if (card.setting3 == 0) {
+          card.state = State_DO_OnDelay;
+          card.startOnMs = nowMs;
+          break;
+        }
+
+        if (card.repeatCounter >= card.setting3) {
+          card.logicalState = false;
+          card.state = State_DO_Finished;
+          break;
+        }
+
+        card.state = State_DO_OnDelay;
+        card.startOnMs = nowMs;
+      }
+      break;
+    }
+    case State_DO_Finished:
+    case State_DO_Idle:
+    default:
+      effectiveOutput = false;
+      break;
+  }
+
+  card.physicalState = effectiveOutput;
+  driveDOHardware(card, driveHardware, effectiveOutput);
+}
+
+void processSIOCard(LogicCard& card, uint32_t nowMs) {
+  processDOCard(card, nowMs, false);
+}
+
+void runScanCycle(uint32_t nowMs) {
+  for (uint8_t i = DI_START; i < DO_START; ++i) {
+    processDICard(logicCards[i], nowMs);
+  }
+  for (uint8_t i = AI_START; i < SIO_START; ++i) {
+    processAICard(logicCards[i]);
+  }
+  for (uint8_t i = SIO_START; i < TOTAL_CARDS; ++i) {
+    processSIOCard(logicCards[i], nowMs);
+  }
+  for (uint8_t i = DO_START; i < AI_START; ++i) {
+    processDOCard(logicCards[i], nowMs, true);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   configureHardwarePinsSafeState();
@@ -1113,5 +1449,14 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  static uint32_t lastScanMs = 0;
+  uint32_t nowMs = millis();
+  if (lastScanMs == 0) {
+    lastScanMs = nowMs;
+  }
+
+  if ((nowMs - lastScanMs) >= SCAN_INTERVAL_MS) {
+    runScanCycle(nowMs);
+    lastScanMs += SCAN_INTERVAL_MS;
+  }
 }
