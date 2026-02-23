@@ -1,427 +1,267 @@
-Stepping & Live Monitoring Architecture
-Overview
+# Configuration Portal Implementation Contract
 
-The Configuration Portal includes a Card-Level Stepping and Live Monitoring System designed to provide deterministic, visual debugging of the LogicCard engine without introducing time virtualization or alternate execution semantics.
+Version: 1.0
+Status: Working Contract
+Applies to: AdvancedTimer Configuration Portal and runtime integration
 
-This functionality enables safe inspection of decision flow while preserving the integrity of the production kernel.
+## 1. Purpose
 
-Stepping is an execution control feature — not a simulation engine.
+This document is the contract for how the Configuration Portal must look, behave, and integrate with the AdvancedTimer kernel.
 
-Design Philosophy
+The contract preserves these foundations:
+- No-code, structured LogicCard configuration.
+- Deterministic runtime transparency.
+- Mobile-first field usability.
+- Safe validation via simulation and dry-run workflows.
+- Strict architectural boundaries between UX/networking and kernel execution.
 
-The stepping system follows these principles:
+## 2. Product Philosophy (Non-Negotiable)
 
-Card-Level Atomic Evaluation
+The portal is a field-configurable smart controller interface, not a general PLC IDE.
 
-Each LogicCard is evaluated as a complete unit.
+The system MUST remain:
+- Parameter-driven.
+- Schema-validated.
+- Deterministic.
+- Safe for commissioning.
 
-No partial card execution is exposed.
+The system MUST NOT introduce:
+- Text scripting.
+- Free-form expressions.
+- Runtime code execution.
+- Alternate execution semantics hidden from operators.
 
-No subsystem-level stepping is supported.
+## 3. UX Contract
 
-Deterministic Order
+### 3.1 Mobile-First Industrial Usability
 
-Cards are evaluated in a fixed, deterministic sequence.
+The UX MUST be optimized for mobile-dominant use in field conditions.
 
-Evaluation order must remain identical in normal and debug modes.
+The portal SHOULD:
+- Minimize keyboard-heavy interactions.
+- Use tactile controls (dial, stepper, segmented buttons, toggles).
+- Keep large tap targets and high contrast.
 
-Single Engine Architecture
+### 3.2 Top-Fixed Runtime Awareness
 
-Stepping does not use a separate simulation engine.
+The UI layout MUST keep a fixed runtime header always visible.
 
-The same runtime kernel is used in both normal and debug modes.
+The fixed header SHOULD include:
+- Current mode (`RUN`, `STEP`, `SIMULATION`).
+- Dry-run/test state.
+- Alarm state.
+- Critical IO indicators.
+- Optional current card index.
 
-Only scan progression behavior changes.
+Card configuration controls MUST be in a separate scrollable region below this header.
 
-No Time Virtualization
+### 3.3 Deterministic Timing Preview (Per Card)
 
-The system does not implement a virtual clock.
+Each configurable timing card SHOULD expose a local analytical timing preview.
 
-Timer behavior decisions are deferred and may be defined separately.
+Preview rules:
+- It is per-card, isolated, read-only.
+- It is computed from configuration parameters only.
+- It does not run kernel logic.
+- It does not virtualize time.
+- It does not alter scan execution.
 
-Stepping does not alter internal timekeeping architecture.
+The preview MUST state trigger assumptions clearly (for example, input true at `t=0`).
 
-Execution Modes
+## 4. Runtime & Debug Control Contract
 
-The engine supports multiple execution modes:
+## 4.1 Stepping and Live Monitoring
 
-RUN_NORMAL
-Full scan executes continuously at fixed scan interval (e.g., 10 ms).
+Stepping is execution control, not simulation.
 
-RUN_STEP
-One LogicCard is evaluated per user trigger.
+Stepping rules:
+- Evaluation granularity MUST be whole LogicCard only.
+- No partial card execution is allowed.
+- Evaluation order MUST match normal deterministic order.
+- Same runtime kernel MUST be used in normal and debug modes.
+- No virtual clock or alternate timing engine is allowed.
 
-RUN_BREAKPOINT
-Execution pauses automatically after a specified LogicCard index completes.
+Execution mode model:
+- `RUN_NORMAL`: continuous scan at fixed interval.
+- `RUN_STEP`: evaluate one card per user step.
+- `RUN_BREAKPOINT`: pause after configured card completes.
+- `RUN_SLOW`: Similar to run normal Mode but between card timing will be longer
 
-RUN_SLOW (optional future mode)
-Sequential card evaluation with controlled delay between cards.
+Live monitoring MUST be read-only and non-intrusive.
 
-All modes use the same evaluation logic and kernel implementation.
+### 4.2 Breakpoint Behavior
 
-Card-Level Stepping Behavior
+Breakpoints are card-level only.
 
-In Step Mode:
+If breakpoint is set on card `N`:
+- Engine continues until card `N` completes atomically.
+- Engine then transitions to paused state.
+- Portal receives a consistent snapshot.
 
-The engine evaluates exactly one LogicCard.
+Breakpoints MUST NOT interrupt a card mid-evaluation.
 
-All internal decisions of that card complete fully.
+### 4.3 Safety During Debug
 
-Output states and internal state transitions are committed.
+In dry-run:
+- Physical outputs MUST NOT energize.
+- Logical states remain visible.
 
-The engine pauses.
+## 5. Simulation/Test Mode Contract
 
-The UI updates to reflect the new system state.
+Simulation mode provides safe validation without energizing selected physical outputs.
 
-The next step command advances to the next card in sequence.
+Simulation rules:
+- Same kernel, same semantics, same real time.
+- No shadow/simulation-only engine.
+- No virtual clock.
+- No logical-vs-physical state duplication layer.
 
-No other cards are evaluated during that step.
+### 5.1 Output Masking
 
-Breakpoint Behavior
+When simulation is active:
+- Logic still computes output states normally.
+- Masked outputs skip physical relay drive.
+- Masking MAY be global or per-channel.
 
-Breakpoints operate at the LogicCard level.
+### 5.2 Input Forcing
 
-If a breakpoint is configured on Card N:
+Each input MAY be real or forced.
 
-The engine executes normally until Card N completes.
+Effective value rule:
+- `effectiveInput = isForced ? forcedValue : realValue`
 
-After completion, the engine enters paused state.
+Input forcing MUST NOT mutate persisted configuration unless explicitly committed as config.
 
-The system state at that moment is exposed to the UI.
+### 5.3 Timing and State Preservation
 
-Breakpoints do not interrupt partial card execution.
+Entering/exiting simulation MUST:
+- Keep timers in real time.
+- Preserve latch/counter/timer states.
+- Avoid engine restart requirements.
 
-Live Monitoring Model
+### 5.4 Simulation + Step
 
-The portal exposes real-time state during:
-
-Normal runtime
-
-Step mode
-
-Breakpoint pauses
-
-For each LogicCard, the following state may be visible:
-
-Current input condition values
-
-Decision result (true/false)
-
-Output state
-
-Latch state (if applicable)
-
-Timer state (if applicable)
-
-Inhibition or dominant override status
-
-State streaming must be read-only and must not interfere with execution timing.
-
-Safety Model (Recommended)
-
-When stepping or breakpoint mode is active:
-
-The system should automatically enable Dry Run Mode.
-
-Physical outputs must not energize.
-
-Logical output states remain fully visible.
-
-This prevents unintended actuation during debugging.
-
-Kernel Requirements
-
-To support stepping functionality, the kernel must:
-
-Represent LogicCards as independently evaluable units.
-
-Allow evaluation of a single card by index.
-
-Maintain an internal currentCardIndex.
-
-Expose engine state (running / paused).
-
-Preserve identical logic semantics across all modes.
-
-Guarantee that card evaluation is atomic and deterministic.
-
-Non-Goals
-
-The stepping system does NOT:
-
-Provide time rewind capability.
-
-Provide state rollback.
-
-Implement alternate timing engines.
-
-Alter logical semantics between debug and normal modes.
-
-Support sub-card or subsystem granularity stepping.
-
-Future Extensions (Optional)
-
-The architecture allows future addition of:
-
-Visual dependency tracing
-
-"Why" decision introspection tooltips
-
-Execution trace logging
-
-Per-card execution timing metrics
-
-Logic signature preview overlays
-
-These features must not require modification of core stepping architecture.
-
-Summary
-
-The stepping system is a deterministic, card-level execution control mechanism that enhances debugging visibility without compromising runtime integrity or introducing simulation complexity.
-
-It preserves:
-
-Single kernel architecture
-
-Fixed evaluation order
-
-Industrial determinism
-
-Safety-first design
-
-
-Simulation & Test Mode Architecture
-Overview
-
-Simulation Mode provides a safe, real-time environment for validating automation logic without energizing physical relay outputs.
-
-Simulation Mode does not introduce:
-
-A separate execution engine
-
-A virtual clock
-
-Logical vs physical output separation
-
-Alternate timing semantics
-
-It operates on the same deterministic logic engine used in Normal operation.
-
-Core Design Principles
-
-Single Engine Architecture
-
-Normal, Step, and Simulation modes all use the same logic kernel.
-
-No shadow engine or simulation-only logic exists.
-
-All evaluation semantics remain identical.
-
-Real-Time Always
-
-All timers continue using real system time.
-
-No time scaling or virtualization is introduced.
-
-Minimal Output Intervention
-
-The logic engine computes output states normally.
-
-In Simulation Mode, relay energizing code is conditionally skipped.
-
-No additional output state abstraction layer is added.
-
-Per-IO Control
-
-Simulation Mode supports per-IO masking and input forcing.
-
-Each IO channel may independently operate in real or simulated mode.
-
-Execution Modes
-
-The system supports three primary execution modes:
-
-MODE_NORMAL
-
-MODE_STEP
-
-MODE_SIMULATION
-
-Simulation Mode may operate in continuous or step-controlled execution.
-
-Simulation Mode Behavior
-
-When Simulation Mode is active:
-
-1️⃣ Output Masking
-
-Logic engine evaluates outputs normally.
-
-Internal output states are updated exactly as in Normal mode.
-
-Hardware relay energizing calls are conditionally skipped.
-
-Masking may be applied globally or per output channel.
-
-Example conceptual behavior:
-
-if (simulationMode && outputMasked[channel])
-{
-    // Skip relay energizing
-}
-else
-{
-    energizeRelay(channel, state);
-}
-
-No additional logical/physical state duplication is introduced.
-
-2️⃣ Input Forcing
-
-Each input channel supports:
-
-Real input value
-
-Forced override value
-
-Force enable flag
-
-During Simulation Mode:
-
-effectiveInput = isForced ? forcedValue : realValue;
-
-The engine always evaluates effectiveInput.
-
-Input forcing is available per channel and does not alter stored configuration.
-
-3️⃣ Timing Behavior
-
-Timers continue to accumulate using real elapsed time.
-
-Entering or exiting Simulation Mode does not reset timers.
-
-No alternate timing engine is created.
-
-4️⃣ State Preservation
-
-Simulation Mode does not reset logic state.
-
-Latches, counters, and timers retain current values.
-
-Mode switching does not require engine restart.
-
-Per-IO Masking Model
-
-In Simulation Mode:
-
-Each Digital Output (DO) may be individually masked or allowed.
-
-Each Input (DI/AI/SIO) may be individually forced or real.
-
-Masking configuration applies only during active Simulation Mode.
-
-This allows:
-
-Testing specific outputs while keeping others active.
-
-Commissioning partial systems.
-
-Controlled relay validation.
-
-Simulation + Stepping Interaction
-
-Simulation Mode may be combined with Step Mode.
+Simulation and step mode MAY be combined.
 
 When combined:
+- One full card evaluation per step.
+- Mask/force behavior remains active.
+- Timing remains real.
 
-One full LogicCard is evaluated per step.
+### 5.5 Operator Indication
 
-Outputs remain masked according to per-IO settings.
+When simulation is active, UI MUST clearly show persistent test indicators, including:
+- `TEST MODE ACTIVE`
+- `OUTPUT MASKED`
+- `INPUT FORCED`
 
-Input forcing remains active.
+Operators MUST always be able to distinguish real vs simulated IO.
 
-Timing remains real.
+## 6. Dual-Core Architecture Contract (ESP32)
 
-Stepping does not alter simulation semantics.
+Core split objective: preserve deterministic scan timing under portal/network load.
 
-UI Indication Requirements
+### 6.1 Core Responsibilities
 
-When Simulation Mode is active:
+Core 0 (deterministic engine) is responsible for:
+- Fixed scan scheduler.
+- LogicCard evaluation.
+- Timer updates.
+- IO abstraction/drive.
+- Step/breakpoint execution semantics.
+- Simulation mask enforcement.
+- Snapshot production.
 
-A persistent visual indicator must be displayed.
+Core 1 (portal/network) is responsible for:
+- Web server and WebSocket.
+- JSON handling.
+- UI interaction.
+- Configuration staging.
+- Visualization and OTA-related portal functions.
 
-Masked outputs should be visually distinguishable.
+### 6.2 Hard Boundary Rules
 
-Forced inputs should be clearly marked.
+Core 1 MUST NOT:
+- Execute logic directly.
+- Modify logic memory directly.
+- Interrupt mid-card execution.
+- Block deterministic scan.
 
-Technician must be able to see which IO is real vs simulated.
+Inter-core exchange MUST use a bounded, explicit mechanism (queue, ring buffer, or double-buffer snapshot).
 
-Recommended UI terminology:
+## 7. Firmware Baseline Constraints (Current `main.cpp`)
 
-TEST MODE ACTIVE
+Current firmware facts that portal behavior MUST respect:
+- Scan interval is `10 ms`.
+- Config persistence path is `/config.json`.
+- Card families: `DigitalInput`, `DigitalOutput`, `AnalogInput`, `SoftIO`.
+- Deterministic family scan order:
+  1. DI
+  2. AI
+  3. SIO
+  4. DO
 
-OUTPUT MASKED
+The portal MUST treat runtime constants and enum names as authoritative from firmware.
 
-INPUT FORCED
+## 8. Configuration Workflow Contract
 
-Safety Considerations
+The portal MUST separate:
+- Staged configuration.
+- Active runtime configuration.
 
-Simulation Mode guarantees:
+Commit workflow MUST be:
+1. Edit staged configuration.
+2. Validate schema and constraints.
+3. Optionally validate behavior analytically (timing preview).
+4. Optionally run simulation test.
+5. Commit full configuration payload.
+6. Persist and confirm active state.
 
-No relay energization for masked outputs.
+On commit failure:
+- Active configuration MUST remain unchanged.
+- Error reason MUST be shown.
+- Staged data SHOULD remain recoverable.
 
-No unintended actuation on masked channels.
+## 9. Architectural Boundary Rule
 
-Engine logic remains fully operational.
+UX and kernel boundaries are strict:
+- UI preview logic MUST NOT depend on runtime engine internals.
+- Portal UI state MUST NOT directly manipulate kernel memory.
+- Portal actions MUST go through an explicit command interface.
+- Kernel determinism MUST NOT depend on UI rendering/network load.
 
-Emergency stop and safety dominance logic must remain fully functional.
+## 10. Non-Goals
 
-Non-Goals
+This contract does not allow:
+- Time rewind.
+- State rollback.
+- Full-system virtual simulation engine.
+- Sub-card stepping granularity.
+- Changing logic semantics between normal/debug/simulation.
 
-Simulation Mode does NOT provide:
+## 11. Future Extensions (Allowed)
 
-Time rewind
+Allowed extensions, if they preserve this contract:
+- Visual dependency tracing.
+- Decision "why" introspection hints.
+- Execution trace logging.
+- Per-card execution timing metrics.
+- Signature overlays.
 
-State rollback
+All extensions MUST preserve:
+- Single-kernel semantics.
+- Deterministic order.
+- Real-time behavior.
+- Safety-first operation.
 
-Virtual execution environment
+## 12. Acceptance Criteria
 
-Alternate evaluation semantics
-
-Separate simulation kernel
-
-Simulation Mode is strictly:
-
-Real-time execution with conditional IO masking and input forcing.
-
-Intended Use Cases
-
-Simulation Mode enables technicians to:
-
-Test safety interlocks safely
-
-Validate sequence logic
-
-Simulate sensor conditions
-
-Commission systems incrementally
-
-Debug without disconnecting field wiring
-
-Summary
-
-Simulation Mode is a real-time, IO-virtualized testing layer built on the production logic engine.
-
-It:
-
-Preserves determinism
-
-Avoids architectural duplication
-
-Maintains timing integrity
-
-Enables safe commissioning
-
-Supports per-IO control
-
-Without increasing kernel complexity.
+Portal implementation is contract-compliant when all are true:
+- No-code, parameter-only configuration flow exists.
+- Mobile-first UX and top-fixed runtime header are implemented.
+- Analytical per-card timing preview is isolated from runtime engine.
+- Step/breakpoint behavior is card-atomic and deterministic.
+- Simulation masking/forcing is real-time and clearly indicated.
+- Dual-core boundary rules are enforced.
+- Staged vs active configuration workflow is explicit and safe.
+- Runtime visualization is read-only and non-intrusive.
