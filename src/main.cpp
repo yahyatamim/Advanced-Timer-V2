@@ -1,601 +1,26 @@
 /**********************************************************************************************
  *
- * ADVANCED TIMER
- * MASTER ARCHITECTURE & BEHAVIOR SPECIFICATION
+ * ADVANCED TIMER FIRMWARE NOTES
  *
- * ============================================================================================
- * 0) PURPOSE OF THIS DOCUMENT
- * ============================================================================================
+ * Canonical behavioral contract lives in README.md.
+ * - Primary reference: README.md Section 19 (Kernel Architecture Contract)
+ * - Integration/runtime contracts: README.md Sections 3 through 18
  *
- * This block comment is the authoritative specification of the Advanced Timer
- * automation kernel.
- *
- * It defines:
- * • Project rationale
- * • System positioning
- * • Architectural principles
- * • Enum semantics
- * • Complete LogicCard field definitions
- * • DigitalInput contract
- * • DigitalOutput / SoftIO contract
- * • Condition system behavior
- *
- * This document serves as:
- * - Firmware development baseline
- * - Configuration portal reference
- * - Long-term system contract
- *
- * If implementation conflicts with this document,
- * this document is the source of truth.
- *
- *
- * ============================================================================================
- * 1) PROJECT RATIONALE & POSITIONING
- * ============================================================================================
- *
- * Traditional Timer Relays:
- * • Fixed manufacturer-defined modes
- * • No composable logic
- * • No inter-signal dependency modeling
- * • Rigid state machines
- *
- * Traditional PLC Systems:
- * • Extremely flexible
- * • Require programming knowledge
- * • Require external engineering tools
- * • Expensive and complex for small systems
- *
- * The Advanced Timer exists between these two extremes.
- *
- * It delivers:
- * • PLC-level logical flexibility
- * • Timer-level configuration simplicity
- * • Data-driven behavior
- * • No user programming requirement
- *
- * Philosophy:
- * Behavior is configured, not coded.
- *
- *
- * ============================================================================================
- * 2) CORE ARCHITECTURAL PRINCIPLES
- * ============================================================================================
- *
- * 2.1 Unified LogicCard Model
- * --------------------------------------------------------------------------------------------
- *
- * Every functional element in the system is represented by a LogicCard.
- *
- * Supported card families:
- *
- * DigitalInput
- * DigitalOutput
- * AnalogInput
- * SoftIO (virtual output)
- *
- * All share:
- * • Same data schema
- * • Same persistence model
- * • Same condition system
- *
- *
- * 2.2 Hardware vs Logic Separation
- * --------------------------------------------------------------------------------------------
- *
- * Logic Layer:
- * - State machines
- * - Timing
- * - Counters
- * - Condition evaluation
- *
- * Hardware Layer:
- * - GPIO binding
- * - ADC sampling
- * - Pin driving
- *
- * LogicCards describe behavior, not hardware directly.
- *
- *
- * 2.3 Persistent vs Runtime Model
- * --------------------------------------------------------------------------------------------
- *
- * Persistent (Filesystem JSON):
- * - type
- * - mode
- * - invert
- * - timing settings (setting1, setting2, setting3)
- * - set/reset conditions
- *
- * Runtime (volatile):
- * - logicalState
- * - physicalState
- * - triggerFlag
- * - currentValue
- * - state
- * - timing registers (startOnMs, startOffMs, repeatCounter)
- * Compatibility note:
- * - AI uses the same persisted keys (setting1/setting2/setting3,
- *   startOnMs/startOffMs, currentValue).
- * - Key names are unchanged; numeric unit meaning follows Section 10
- *   fixed-point centiunit rules.
- * - This phase does not require a schema migration.
- *
- *
- * ============================================================================================
- * 3) ENUM DEFINITIONS & SEMANTICS
- * ============================================================================================
- *
- * 3.1 logicCardType
- * --------------------------------------------------------------------------------------------
- *
- * DigitalInput → Physical digital GPIO input
- * DigitalOutput → Physical digital GPIO output
- * AnalogInput → Physical analog input channel
- * SoftIO → Virtual output-like logic signal
- *
- *
- * 3.2 logicOperator
- * --------------------------------------------------------------------------------------------
- *
- * Op_AlwaysTrue → unconditional clause
- * Op_None → clause disabled
- *
- * Logical Operators:
- * Op_LogicalTrue
- * Op_LogicalFalse
- *
- * Physical Operators:
- * Op_PhysicalOn
- * Op_PhysicalOff
- *
- * Trigger Operators:
- * Op_Triggered
- * Op_TriggerCleared
- *
- * Numeric Operators (compare against currentValue):
- * Op_GT, Op_LT, Op_EQ, Op_NEQ, Op_GTE, Op_LTE
- *
- * Process State Operators:
- * Op_Running
- * Op_Finished
- * Op_Stopped
- *
- *
- * 3.3 cardMode
- * --------------------------------------------------------------------------------------------
- *
- * DI Modes:
- *
- * DI modes determine TWO things:
- * 1. Which edge type triggers the one-cycle pulse (triggerFlag)
- * 2. Which edge type increments the event counter (currentValue)
- *
- * DI_Rising
- * - Triggers on: LOW → HIGH transition (rising edge only)
- * - Counter increments on: rising edges only
- * - Pulse (triggerFlag): generated on each rising edge (after debounce)
- * - Use case: Count button presses, start signals, rising events
- * - Example: Button pressed 3 times → currentValue = 3
- *
- * DI_Falling
- * - Triggers on: HIGH → LOW transition (falling edge only)
- * - Counter increments on: falling edges only
- * - Pulse (triggerFlag): generated on each falling edge (after debounce)
- * - Use case: Count button releases, stop signals, falling events
- * - Example: Button released 3 times → currentValue = 3
- *
- * DI_Change
- * - Triggers on: ANY transition (both rising AND falling edges)
- * - Counter increments on: all edges (both directions)
- * - Pulse (triggerFlag): generated on each edge (after debounce)
- * - Use case: Count total state changes, toggle-based behavior
- * - Example: Button pressed and released once → currentValue = 2 (both edges)
- *
- * DI Mode Behavior Matrix:
- * | Mode | Rising Edge | Falling Edge | Counter Behavior |
- * | --- | --- | --- | --- |
- * | DI_Rising | Counts ✓ | Ignores ✗ | Increments only on ↑ |
- * | DI_Falling | Ignores ✗ | Counts ✓ | Increments only on ↓ |
- * | DI_Change | Counts ✓ | Counts ✓ | Increments on any transition |
- *
- * Important: Mode acts as a COUNTER INCREMENT FILTER
- * - Edge detection is mode-dependent
- * - triggerFlag pulse is ONLY generated when detected edge matches mode
- * - currentValue only increments when detected edge matches mode
- * - Debounce (setting1) is applied before mode checking
- * - All counter increments occur only when setCondition == true
- *
- *
- * DO/SIO Modes:
- * DO_Normal
- * - First action: wait setting1 (OnDelay), then run Active.
- * - Input dependency: latched (ignores setCondition after trigger).
- * - Repeat behavior: full cycle for cycles 2..N.
- * - Primary use: sequential startups and deterministic delayed activation.
- *
- * DO_Immediate
- * - First action: skip initial OnDelay and enter Active immediately.
- * - Input dependency: latched (ignores setCondition after trigger).
- * - Repeat behavior: cycles 2..N run full cycle timing (OnDelay -> Active).
- * - Primary use: leading-edge pulse with stable periodic follow-up cycles.
- *
- * DO_Gated
- * - First action: wait setting1 (OnDelay), then run Active.
- * - Input dependency: gated (setCondition must stay true while running).
- * - Repeat behavior: full cycle while gate stays true.
- * - Primary use: safety interlock / enable chain behavior.
- *
- * DO/SIO comparison matrix:
- * | Feature | DO_Normal | DO_Immediate | DO_Gated |
- * | --- | --- | --- | --- |
- * | First action | Wait setting1 | Active immediately | Wait setting1 |
- * | Input dependency | Latched | Latched | Gated |
- * | Repeat 2..N | Full cycle | Full cycle | Full cycle if gate stays true |
- * | Primary use | Sequential startups | Instant alert pulse | Safety /
- * interlock |
- *
- * Legacy mode values:
- * - Retained for schema compatibility only.
- * - Deprecated for new DO/SIO configurations.
- * AI Placeholder Mode:
- * Mode_AI_Continuous
- * - Placeholder semantic tag for future AI runtime implementation.
- * - No additional runtime behavior is introduced in this phase.
- *
- *
- * 3.4 cardState
- * --------------------------------------------------------------------------------------------
- *
- * Generic states retained for compatibility.
- *
- * DO/SIO Canonical Phases:
- *
- * State_DO_Idle
- * State_DO_OnDelay
- * State_DO_Active
- * State_DO_Finished
- *
- * AI Placeholder State:
- * State_AI_Streaming
- * - Placeholder semantic tag for future AI runtime implementation.
- * - AI does not use a phase-machine in this phase.
- *
- *
- * 3.5 logicCombine
- * --------------------------------------------------------------------------------------------
- *
- * Combine_None → Use clause A only
- * Combine_AND → A && B
- * Combine_OR → A || B
- *
- *
- * ============================================================================================
- * 4) LOGICCARD STRUCT — COMPLETE FIELD SPECIFICATION
- * ============================================================================================
- *
- * Identity & Binding:
- *
- * id → Global unique ID
- * type → logicCardType
- * index → Position within family
- * hwPin → Hardware pin (255 for virtual)
- *
- *
- * Configuration:
- *
- * invert → bool
- *          true  = Active Low / inverted polarity
- *          false = Active High / normal polarity
- *
- *
- * Timing Parameters (fixed-point centiunits unless explicitly noted):
- *
- * setting1 → DO/SIO: ON delay / pulse-high duration
- *            DI:     debounce window
- *            AI:     input minimum (raw ADC/sensor lower bound)
- *
- * setting2 → DO/SIO: OFF delay / inter-cycle rest
- *            DI:     reserved
- *            AI:     input maximum (raw ADC/sensor upper bound)
- *
- * setting3 → DO/SIO: repeat count
- *                 0     = infinite
- *                 1     = one-shot
- *                 >1    = exactly N full cycles
- *            DI:     extra parameter / future use (e.g. filter samples,
- * long-press threshold…)
- *            AI:     EMA alpha in fixed range 0..1000 (0.0..1.0)
- *
- *
- * Core Runtime Signals:
- *
- * logicalState → DI: qualified logical input
- *                DO/SIO: mission latch (intent to run)
- *
- * physicalState → DI: polarity-adjusted / debounced input state
- *                 DO/SIO: time-shaped effective output truth
- *
- * triggerFlag → One-cycle pulse
- *               DI: edge detection (after debounce/qualify)
- *               DO/SIO: ignition from setCondition rising edge
- *
- *
- * Timing Registers:
- *
- * currentValue → DI: event counter
- *                DO/SIO: cycle counter (increments on physical rising edge)
- *                AI: EMA accumulator and filtered output value
- *
- * startOnMs -> Timestamp when current ON-phase began
- *             AI: output minimum (scaled physical lower bound)
- *
- * startOffMs -> Timestamp when current OFF-phase began
- *              AI: output maximum (scaled physical upper bound)
- *
- * repeatCounter -> DO/SIO: counts completed cycles for repeat logic
- *                 AI: unused placeholder in this phase
- *
- *
- * Mode & State:
- *
- * mode → DI: edge / debounce behavior
- *        DO/SIO: execution engine switch
- *                DO_Normal, DO_Immediate, DO_Gated
- *                (legacy mode values are compatibility-only)
- *        AI: placeholder mode tag (Mode_AI_Continuous)
- *
- * state → DI: filtering lifecycle state
- *         DO/SIO: phase state (Idle, OnDelay, Active, Finished)
- *         AI: placeholder state tag (State_AI_Streaming)
- *
- *
- * SET Group Fields:
- *
- * setA_ID
- * setA_Operator
- * setA_Threshold
- *
- * setB_ID
- * setB_Operator
- * setB_Threshold
- *
- * setCombine
- *
- *
- * RESET Group Fields:
- *
- * resetA_ID
- * resetA_Operator
- * resetA_Threshold
- *
- * resetB_ID
- * resetB_Operator
- * resetB_Threshold
- *
- * resetCombine
- *
- *
- * ============================================================================================
- * 5) SEQUENTIAL SCAN ENGINE CONTRACT
- * ============================================================================================
- *
- * Runtime model:
- * The automation kernel executes as a deterministic sequential scan engine.
- * One full scan cycle processes card families in a fixed order, then repeats.
- *
- * Canonical scan order per cycle:
- * 1) DigitalInput (DI) cards   : DI[0] -> DI[1] -> ... -> DI[N-1]
- * 2) AnalogInput (AI) cards    : AI[0] -> AI[1] -> ... -> AI[M-1]
- * 3) SoftIO (SIO) cards        : SIO[0] -> SIO[1] -> ... -> SIO[K-1]
- * 4) DigitalOutput (DO) cards  : DO[0] -> DO[1] -> ... -> DO[P-1]
- * 5) End of scan -> restart from DI[0]
- *
- * Per-card execution rule:
- * - Each card is fully evaluated when visited in sequence.
- * - The engine updates all relevant runtime fields for that card before moving
- * on. (e.g., physicalState, logicalState, triggerFlag, currentValue, state,
- * timing registers)
- *
- * DI-specific behavior during scan:
- * - On each DI visit, evaluate physical input first.
- * - Apply invert/debounce/gating/reset rules.
- * - Update logical state, trigger pulse, and counter (if conditions permit).
- * - Commit DI runtime updates before visiting next DI.
- *
- * Cross-family visibility:
- * - Cards evaluated later in the same scan see already-updated runtime values
- *   of cards evaluated earlier in that scan.
- * - Cards evaluated earlier see later-card changes only on the next scan.
- * - Because AI is evaluated before SIO/DO, downstream cards in the same scan
- *   cycle consume AI values updated in that same cycle.
- *
- * Determinism requirement:
- * - Scan order must remain fixed and predictable for repeatable behavior.
- * - No parallel/async card evaluation is assumed in this contract.
- *
- * Reset priority:
- * - resetCondition handling remains highest priority at card level as defined
- * elsewhere.
- * - Reset effects are applied immediately when that card is evaluated in scan.
- *
- * Note:
- * - This section defines global execution scheduling.
- * - Card-local logic semantics (DI/DO/SIO modes, phase transitions, repeat
- * logic, etc.) are defined in their respective contract sections.
- *
- *
- * ============================================================================================
- * 6) DIGITAL INPUT (DI) CONTRACT
- * ============================================================================================
- *
- * SET behavior:
- * Acts as gated enable.
- *
- * DI processing (edge detection, debounce, counter) occurs only when:
- * setCondition == true
- *
- * RESET behavior:
- * Clears:
- * - logicalState
- * - triggerFlag
- * - currentValue
- * - timing registers
- *
- * Also inhibits DI processing while true.
- *
- * Always update physical state (invert adjusted) in all the conditions.
- *
- * ============================================================================================
- * 7) DIGITAL OUTPUT (DO) & SOFTIO CONTRACT
- * ============================================================================================
- *
- * Trigger Model:
- * Mode switch behavior:
- * - DO_Normal:
- *   On trigger: Idle -> OnDelay -> Active -> repeat/finalize.
- * - DO_Immediate:
- *   On trigger: Idle -> Active (first cycle only).
- *   For cycles 2..N: OnDelay -> Active.
- * - DO_Gated:
- *   Same timing sequence as DO_Normal, but setCondition must stay true.
- *   If setCondition drops during OnDelay or Active, abort immediately to Idle.
- * setCondition rising edge → triggerFlag (one cycle)
- * triggerFlag → latch logicalState = true  (non-retriggerable while running)
- *
- * Non-Retriggerable:
- * New setCondition rising edges are ignored while state is not
- * State_DO_Idle or State_DO_Finished.
- *
- * Phases per cycle:
- * Canonical sequence: Idle -> OnDelay -> Active -> (repeat or Finished/Idle)
- *
- * Idle → OnDelay → Active → (repeat or Finished/Idle)
- *
- * Repeat logic:
- * - setting3 = 0     → repeat forever until reset
- * - setting3 = 1     → single cycle then complete
- * - setting3 = N > 1 → exactly N full cycles then complete
- *
- * Mission Completion:
- *
- * On final cycle completion:
- * - logicalState = false
- * - state = State_DO_Finished
- * - counter left at final value
- *
- * Card becomes re-armable.
- *
- * RESET:
- * - Immediate hard stop
- * - Clears counter, timers, logicalState
- * - Forces Idle
- * - Has highest priority over mode execution
- *
- * Execution Note:
- * - Retriggering is blocked while running (re-arm only in Idle or Finished).
- * - DO_Gated aborts mission on gate loss during OnDelay/Active.
- * - resetCondition always preempts all modes.
- *
- *
- * ============================================================================================
- * 8) ANALOG INPUT (AI) CONTRACT
- * ============================================================================================
- *
- * AI philosophy:
- * - AI cards are pure sensor transducers.
- * - AI is stateless except for EMA accumulation in currentValue.
- * - AI is evaluated every scan tick in deterministic order.
- * - AI is not mission-driven, event-triggered, latched, or phase-based.
- *
- * AI per-scan deterministic pipeline:
- * 1) Sample: read raw analog value from card hwPin.
- * 2) Clamp: constrain raw sample to [setting1, setting2].
- * 3) Scale: map clamped value linearly from input range to output range
- *    [startOnMs, startOffMs].
- * 4) Filter: apply EMA using setting3 alpha (0..1000 => 0.0..1.0).
- * 5) Store: write filtered result to currentValue for downstream consumption.
- *
- * AI gating and reset behavior:
- * - AI processing is never gated by setCondition or resetCondition.
- * - AI processing is never paused by set/reset groups.
- * - set/reset fields are schema placeholders for AI in this phase.
- *
- * AI range behavior:
- * - Raw input below setting1 clips to setting1.
- * - Raw input above setting2 clips to setting2.
- * - Values in range are linearly interpolated to [startOnMs, startOffMs].
- * - Directionality comes from endpoint assignment; no invert flag is required.
- *
- * AI numeric domain:
- * - All AI numeric parameters are non-negative unsigned values.
- * - No negative ranges or negative accumulator states are supported.
- *
- * AI fixed-point convention:
- * - AI numeric/storage conventions are defined by Section 10.
- *
- * ============================================================================================
- * 9) SYSTEM IDENTITY
- * ============================================================================================
- * This system is:
- *
- * A configurable automation kernel.
- * A composable logic engine.
- * A PLC-inspired embedded core.
- *
- * It is not:
- * A fixed-function timer.
- * A ladder-logic PLC.
- *
- * Core Idea:
- *
- * From hardcoded firmware
- * → To behavior-defined automation.
- *
- *
- * ============================================================================================
- * 10) FIXED-POINT DECIMAL CONVENTION (2 DECIMAL PLACES)
- * ============================================================================================
- *
- * Core rule:
- * - Values requiring decimals are stored as uint32_t centiunits (value x 100).
- * - JSON numeric storage in this phase uses integer centiunits.
- *
- * Conversion:
- * - display = stored / 100
- * - stored = round_half_away(display * 100)
- *
- * Field scope (minimal):
- * | Field(s) | Contract |
- * | --- | --- |
- * | setting1, setting2 | DI/DO/SIO timing + AI input range -> centiunits |
- * | startOnMs, startOffMs | AI scaling endpoints -> centiunits |
- * | setA_Threshold, setB_Threshold, resetA_Threshold, resetB_Threshold |
- * Numeric condition thresholds -> centiunits | | setting3 (DO/SIO, DI) |
- * Integer repeat/reserved (not centiunits) | | setting3 (AI) | Alpha in
- * milliunits 0..1000 (not centiunits) | | currentValue | AI -> centiunits;
- * DI/DO/SIO -> integer counters |
- *
- * AI scaling (centiunit arithmetic):
- * - scaled = startOnMs + (clamped - setting1) * (startOffMs - startOnMs) /
- *   (setting2 - setting1)
- *
- * Constraints:
- * - Numeric domain is non-negative unsigned.
- * - AI input bounds: setting1 <= setting2.
- * - AI output endpoints may be increasing or decreasing
- *   (startOnMs may be < or > startOffMs).
- *
- * Migration note (future work):
- * - Legacy millisecond/unitless configs require schema-versioned migration in
- *   a later phase; not defined here.
- *
+ * This file should keep only implementation-local comments.
+ * Do not duplicate long-form architecture contracts here.
  **********************************************************************************************/
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <WebServer.h>
+#include <WebSocketsServer.h>
+#include <WiFi.h>
 
 #include <cstring>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 const uint8_t DI_Pins[] = {13, 12, 14, 27};  // Digital Input pins
 const uint8_t DO_Pins[] = {26, 25, 33, 32};  // Digital Output pins
@@ -616,7 +41,19 @@ const uint8_t DO_START = DI_START + NUM_DI;
 const uint8_t AI_START = DO_START + NUM_DO;
 const uint8_t SIO_START = AI_START + NUM_AI;
 const char* kConfigPath = "/config.json";
-const uint32_t SCAN_INTERVAL_MS = 10;
+const char* kStagedConfigPath = "/config_staged.json";
+const char* kLkgConfigPath = "/config_lkg.json";
+const char* kSlot1ConfigPath = "/config_slot1.json";
+const char* kSlot2ConfigPath = "/config_slot2.json";
+const char* kSlot3ConfigPath = "/config_slot3.json";
+const char* kFactoryConfigPath = "/config_factory.json";
+const uint32_t SCAN_INTERVAL_MS = 500;
+const char* kMasterSsid = "advancedtimer";
+const char* kMasterPassword = "12345678";
+const char* kDefaultUserSsid = "FactoryNext";
+const char* kDefaultUserPassword = "FactoryNext20$22#";
+const uint32_t MASTER_WIFI_TIMEOUT_MS = 2000;
+const uint32_t USER_WIFI_TIMEOUT_MS = 180000;
 
 #ifndef LOGIC_ENGINE_DEBUG
 #define LOGIC_ENGINE_DEBUG 0
@@ -688,6 +125,13 @@ enum logicOperator { LIST_OPERATORS(as_enum) };
 enum cardMode { LIST_MODES(as_enum) };
 enum cardState { LIST_STATES(as_enum) };
 enum combineMode { LIST_COMBINE(as_enum) };
+enum runMode { RUN_NORMAL, RUN_STEP, RUN_BREAKPOINT, RUN_SLOW };
+enum inputSourceMode {
+  InputSource_Real,
+  InputSource_ForcedHigh,
+  InputSource_ForcedLow,
+  InputSource_ForcedValue
+};
 #undef as_enum
 
 #define ENUM_TO_STRING_CASE(name) \
@@ -723,6 +167,36 @@ const char* toString(cardState value) {
 const char* toString(combineMode value) {
   switch (value) { LIST_COMBINE(ENUM_TO_STRING_CASE) }
   return "Combine_None";
+}
+
+const char* toString(runMode value) {
+  switch (value) {
+    case RUN_NORMAL:
+      return "RUN_NORMAL";
+    case RUN_STEP:
+      return "RUN_STEP";
+    case RUN_BREAKPOINT:
+      return "RUN_BREAKPOINT";
+    case RUN_SLOW:
+      return "RUN_SLOW";
+    default:
+      return "RUN_NORMAL";
+  }
+}
+
+const char* toString(inputSourceMode value) {
+  switch (value) {
+    case InputSource_Real:
+      return "REAL";
+    case InputSource_ForcedHigh:
+      return "FORCED_HIGH";
+    case InputSource_ForcedLow:
+      return "FORCED_LOW";
+    case InputSource_ForcedValue:
+      return "FORCED_VALUE";
+    default:
+      return "REAL";
+  }
 }
 
 bool tryParseLogicCardType(const char* s, logicCardType& out) {
@@ -889,6 +363,114 @@ bool gPrevSetCondition[TOTAL_CARDS] = {};
 bool gPrevDISample[TOTAL_CARDS] = {};
 bool gPrevDIPrimed[TOTAL_CARDS] = {};
 
+struct SharedRuntimeSnapshot {
+  uint32_t seq;
+  uint32_t tsMs;
+  runMode mode;
+  bool testModeActive;
+  bool globalOutputMask;
+  bool breakpointPaused;
+  uint16_t scanCursor;
+  LogicCard cards[TOTAL_CARDS];
+  inputSourceMode inputSource[TOTAL_CARDS];
+  uint32_t forcedAIValue[TOTAL_CARDS];
+  bool outputMaskLocal[TOTAL_CARDS];
+};
+
+QueueHandle_t gKernelCommandQueue = nullptr;
+TaskHandle_t gCore0TaskHandle = nullptr;
+TaskHandle_t gCore1TaskHandle = nullptr;
+portMUX_TYPE gSnapshotMux = portMUX_INITIALIZER_UNLOCKED;
+SharedRuntimeSnapshot gSharedSnapshot = {};
+WebServer gPortalServer(80);
+WebSocketsServer gWsServer(81);
+char gUserSsid[33] = {};
+char gUserPassword[65] = {};
+bool gPortalReconnectRequested = false;
+bool gPortalServerInitialized = false;
+bool gWsServerInitialized = false;
+volatile bool gKernelPauseRequested = false;
+volatile bool gKernelPaused = false;
+uint32_t gConfigVersionCounter = 1;
+char gActiveVersion[16] = "v1";
+char gLkgVersion[16] = "";
+char gSlot1Version[16] = "";
+char gSlot2Version[16] = "";
+char gSlot3Version[16] = "";
+
+runMode gRunMode = RUN_NORMAL;
+uint16_t gScanCursor = 0;
+bool gStepRequested = false;
+bool gBreakpointPaused = false;
+bool gTestModeActive = false;
+bool gGlobalOutputMask = false;
+
+bool gCardBreakpoint[TOTAL_CARDS] = {};
+bool gCardOutputMask[TOTAL_CARDS] = {};
+inputSourceMode gCardInputSource[TOTAL_CARDS] = {};
+uint32_t gCardForcedAIValue[TOTAL_CARDS] = {};
+
+const uint32_t SLOW_SCAN_INTERVAL_MS = 250;
+
+bool isOutputMasked(uint8_t cardId);
+uint8_t scanOrderCardIdFromCursor(uint16_t cursor);
+bool connectWiFiWithPolicy();
+void initPortalServer();
+void handlePortalServerLoop();
+void initWebSocketServer();
+void handleWebSocketLoop();
+void publishRuntimeSnapshotWebSocket();
+bool applyCommand(JsonObjectConst command);
+void updateSharedRuntimeSnapshot(uint32_t nowMs, bool incrementSeq);
+void handleHttpSettingsPage();
+void handleHttpConfigPage();
+void handleHttpGetSettings();
+void handleHttpSaveSettingsWiFi();
+void handleHttpReconnectWiFi();
+void handleHttpReboot();
+void handleHttpGetActiveConfig();
+void handleHttpStagedSaveConfig();
+void handleHttpStagedValidateConfig();
+void handleHttpCommitConfig();
+void handleHttpRestoreConfig();
+void serializeCardsToArray(const LogicCard* sourceCards, JsonArray& array);
+void initializeCardArraySafeDefaults(LogicCard* cards);
+bool deserializeCardsFromArray(JsonArrayConst array, LogicCard* outCards);
+bool validateConfigCardsArray(JsonArrayConst array, String& reason);
+bool writeJsonToPath(const char* path, JsonDocument& doc);
+bool readJsonFromPath(const char* path, JsonDocument& doc);
+bool saveCardsToPath(const char* path, const LogicCard* sourceCards);
+bool loadCardsFromPath(const char* path, LogicCard* outCards);
+bool copyFileIfExists(const char* srcPath, const char* dstPath);
+void formatVersion(char* out, size_t outSize, uint32_t version);
+bool pauseKernelForConfigApply(uint32_t timeoutMs);
+void resumeKernelAfterConfigApply();
+void rotateHistoryVersions();
+bool applyCardsAsActiveConfig(const LogicCard* newCards);
+bool extractConfigCardsFromRequest(JsonObjectConst root, JsonArrayConst& outCards,
+                                   String& reason);
+void writeConfigErrorResponse(int statusCode, const char* code,
+                              const String& message);
+
+enum kernelCommandType {
+  KernelCmd_SetRunMode,
+  KernelCmd_StepOnce,
+  KernelCmd_SetBreakpoint,
+  KernelCmd_SetTestMode,
+  KernelCmd_SetInputForce,
+  KernelCmd_SetOutputMask,
+  KernelCmd_SetOutputMaskGlobal
+};
+
+struct KernelCommand {
+  kernelCommandType type;
+  uint8_t cardId;
+  bool flag;
+  uint32_t value;
+  runMode mode;
+  inputSourceMode inputMode;
+};
+
 void serializeCardToJson(const LogicCard& card, JsonObject& json) {
   json["id"] = card.id;
   json["type"] = toString(card.type);
@@ -986,10 +568,10 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
   card.startOffMs = 0;
   card.repeatCounter = 0;
 
-  card.setA_ID = 0;
-  card.setB_ID = 0;
-  card.resetA_ID = 0;
-  card.resetB_ID = 0;
+  card.setA_ID = globalId;
+  card.setB_ID = globalId;
+  card.resetA_ID = globalId;
+  card.resetB_ID = globalId;
   card.setA_Operator = Op_AlwaysFalse;
   card.setB_Operator = Op_AlwaysFalse;
   card.resetA_Operator = Op_AlwaysFalse;
@@ -1005,7 +587,11 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
     card.type = DigitalInput;
     card.index = globalId - DI_START;
     card.hwPin = DI_Pins[card.index];
-    card.mode = Mode_None;
+    // DI defaults: debounced edge input behavior.
+    card.setting1 = 50;   // debounce window
+    card.setting2 = 0;    // reserved
+    card.setting3 = 0;    // reserved
+    card.mode = Mode_DI_Rising;
     card.state = State_DI_Idle;
     return;
   }
@@ -1014,6 +600,10 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
     card.type = DigitalOutput;
     card.index = globalId - DO_START;
     card.hwPin = DO_Pins[card.index];
+    // DO defaults: safe one-shot profile, but disabled by condition defaults.
+    card.setting1 = 1000;  // on-delay / active window
+    card.setting2 = 1000;  // off-delay
+    card.setting3 = 1;     // one cycle
     card.mode = Mode_DO_Normal;
     card.state = State_DO_Idle;
     return;
@@ -1023,6 +613,12 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
     card.type = AnalogInput;
     card.index = globalId - AI_START;
     card.hwPin = AI_Pins[card.index];
+    // AI defaults: raw ADC range with moderate smoothing and 0..100.00 output.
+    card.setting1 = 0;      // input minimum
+    card.setting2 = 4095;   // input maximum
+    card.setting3 = 250;    // EMA alpha = 0.25
+    card.startOnMs = 0;     // output minimum (centiunits)
+    card.startOffMs = 10000;  // output maximum (centiunits)
     card.mode = Mode_AI_Continuous;
     card.state = State_AI_Streaming;
     return;
@@ -1031,6 +627,10 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
   card.type = SoftIO;
   card.index = globalId - SIO_START;
   card.hwPin = SIO_Pins[card.index];
+  // SoftIO defaults follow DO defaults (virtual output).
+  card.setting1 = 1000;
+  card.setting2 = 1000;
+  card.setting3 = 1;
   card.mode = Mode_DO_Normal;
   card.state = State_DO_Idle;
 }
@@ -1090,6 +690,555 @@ void printLogicCardsJsonToSerial(const char* label) {
   Serial.println();
 }
 
+void copySharedRuntimeSnapshot(SharedRuntimeSnapshot& outSnapshot) {
+  portENTER_CRITICAL(&gSnapshotMux);
+  outSnapshot = gSharedSnapshot;
+  portEXIT_CRITICAL(&gSnapshotMux);
+}
+
+void appendRuntimeSnapshotCard(JsonArray& cards,
+                               const SharedRuntimeSnapshot& snapshot,
+                               uint8_t cardId) {
+  const LogicCard& card = snapshot.cards[cardId];
+  JsonObject node = cards.add<JsonObject>();
+  node["id"] = card.id;
+  node["type"] = toString(card.type);
+  node["index"] = card.index;
+  node["familyOrder"] = cardId;
+  node["physicalState"] = card.physicalState;
+  node["logicalState"] = card.logicalState;
+  node["triggerFlag"] = card.triggerFlag;
+  node["state"] = toString(card.state);
+  node["mode"] = toString(card.mode);
+  node["currentValue"] = card.currentValue;
+  node["startOnMs"] = card.startOnMs;
+  node["startOffMs"] = card.startOffMs;
+  node["repeatCounter"] = card.repeatCounter;
+
+  JsonObject forced = node["maskForced"].to<JsonObject>();
+  forced["inputSource"] = toString(snapshot.inputSource[cardId]);
+  forced["forcedAIValue"] = snapshot.forcedAIValue[cardId];
+  forced["outputMaskLocal"] = snapshot.outputMaskLocal[cardId];
+  forced["outputMasked"] =
+      snapshot.testModeActive &&
+      (snapshot.globalOutputMask || snapshot.outputMaskLocal[cardId]);
+}
+
+void serializeRuntimeSnapshot(JsonDocument& doc, uint32_t nowMs) {
+  SharedRuntimeSnapshot snapshot = {};
+  copySharedRuntimeSnapshot(snapshot);
+
+  doc["type"] = "runtime_snapshot";
+  doc["schemaVersion"] = 1;
+  doc["tsMs"] = (snapshot.tsMs == 0) ? nowMs : snapshot.tsMs;
+  doc["scanIntervalMs"] = SCAN_INTERVAL_MS;
+  doc["runMode"] = toString(snapshot.mode);
+  doc["snapshotSeq"] = snapshot.seq;
+
+  JsonObject testMode = doc["testMode"].to<JsonObject>();
+  testMode["active"] = snapshot.testModeActive;
+  testMode["outputMaskGlobal"] = snapshot.globalOutputMask;
+  testMode["breakpointPaused"] = snapshot.breakpointPaused;
+  testMode["scanCursor"] = snapshot.scanCursor;
+
+  JsonArray cards = doc["cards"].to<JsonArray>();
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    appendRuntimeSnapshotCard(cards, snapshot, scanOrderCardIdFromCursor(i));
+  }
+}
+
+bool waitForWiFiConnected(uint32_t timeoutMs) {
+  uint32_t startMs = millis();
+  while ((millis() - startMs) < timeoutMs) {
+    if (WiFi.status() == WL_CONNECTED) return true;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  return false;
+}
+
+bool connectWiFiWithPolicy() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  vTaskDelay(pdMS_TO_TICKS(50));
+
+  WiFi.begin(kMasterSsid, kMasterPassword);
+  if (waitForWiFiConnected(MASTER_WIFI_TIMEOUT_MS)) {
+    Serial.print("WiFi connected via MASTER SSID. IP: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  }
+
+  WiFi.disconnect(true, true);
+  vTaskDelay(pdMS_TO_TICKS(50));
+
+  WiFi.begin(gUserSsid, gUserPassword);
+  if (waitForWiFiConnected(USER_WIFI_TIMEOUT_MS)) {
+    Serial.print("WiFi connected via USER SSID. IP: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  }
+
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("WiFi offline mode (master/user connect attempts failed)");
+  return false;
+}
+
+void handleHttpRoot() {
+  File file = LittleFS.open("/index.html", "r");
+  if (!file) {
+    gPortalServer.send(404, "text/plain",
+                       "index.html not found in LittleFS (/data upload needed)");
+    return;
+  }
+  gPortalServer.streamFile(file, "text/html");
+  file.close();
+}
+
+void handleHttpSettingsPage() {
+  File file = LittleFS.open("/settings.html", "r");
+  if (!file) {
+    gPortalServer.send(
+        404, "text/plain",
+        "settings.html not found in LittleFS (/data upload needed)");
+    return;
+  }
+  gPortalServer.streamFile(file, "text/html");
+  file.close();
+}
+
+void handleHttpConfigPage() {
+  File file = LittleFS.open("/config.html", "r");
+  if (!file) {
+    gPortalServer.send(
+        404, "text/plain",
+        "config.html not found in LittleFS (/data upload needed)");
+    return;
+  }
+  gPortalServer.streamFile(file, "text/html");
+  file.close();
+}
+
+void handleHttpGetSettings() {
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["masterSsid"] = kMasterSsid;
+  doc["masterEditable"] = false;
+  doc["userSsid"] = gUserSsid;
+  doc["userPassword"] = gUserPassword;
+  doc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
+  doc["wifiIp"] = WiFi.localIP().toString();
+  doc["firmwareVersion"] = String(__DATE__) + " " + String(__TIME__);
+
+  String body;
+  serializeJson(doc, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void handleHttpSaveSettingsWiFi() {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, gPortalServer.arg("plain"));
+  if (error || !doc.is<JsonObject>()) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"INVALID_REQUEST\"}");
+    return;
+  }
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  const char* ssid = root["userSsid"] | "";
+  const char* password = root["userPassword"] | "";
+
+  if (strlen(ssid) == 0 || strlen(ssid) > 32 || strlen(password) > 64) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"VALIDATION_FAILED\"}");
+    return;
+  }
+
+  strncpy(gUserSsid, ssid, sizeof(gUserSsid) - 1);
+  gUserSsid[sizeof(gUserSsid) - 1] = '\0';
+  strncpy(gUserPassword, password, sizeof(gUserPassword) - 1);
+  gUserPassword[sizeof(gUserPassword) - 1] = '\0';
+
+  gPortalServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleHttpReconnectWiFi() {
+  gPortalReconnectRequested = true;
+  gPortalServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleHttpReboot() {
+  gPortalServer.send(200, "application/json", "{\"ok\":true}");
+  gPortalServer.client().stop();
+  delay(200);
+  ESP.restart();
+}
+
+void handleHttpSnapshot() {
+  JsonDocument doc;
+  serializeRuntimeSnapshot(doc, millis());
+  String body;
+  serializeJson(doc, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void handleHttpCommand() {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, gPortalServer.arg("plain"));
+  if (error || !doc.is<JsonObject>()) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"INVALID_REQUEST\"}");
+    return;
+  }
+
+  bool ok = applyCommand(doc.as<JsonObjectConst>());
+  if (!ok) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"COMMAND_REJECTED\"}");
+    return;
+  }
+
+  gPortalServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleHttpGetActiveConfig() {
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["schemaVersion"] = 1;
+  doc["activeVersion"] = gActiveVersion;
+  JsonObject config = doc["config"].to<JsonObject>();
+  JsonArray cards = config["cards"].to<JsonArray>();
+  serializeCardsToArray(logicCards, cards);
+  doc["error"] = nullptr;
+  String body;
+  serializeJson(doc, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void handleHttpStagedSaveConfig() {
+  JsonDocument request;
+  DeserializationError parseError =
+      deserializeJson(request, gPortalServer.arg("plain"));
+  if (parseError || !request.is<JsonObjectConst>()) {
+    writeConfigErrorResponse(400, "INVALID_REQUEST", "invalid json");
+    return;
+  }
+
+  JsonObjectConst root = request.as<JsonObjectConst>();
+  JsonArrayConst cards;
+  String reason;
+  if (!extractConfigCardsFromRequest(root, cards, reason)) {
+    writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
+    return;
+  }
+
+  if (!writeJsonToPath(kStagedConfigPath, request)) {
+    writeConfigErrorResponse(500, "COMMIT_FAILED", "failed to save staged file");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["stagedVersion"] = "staged";
+  response["error"] = nullptr;
+  String body;
+  serializeJson(response, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void handleHttpStagedValidateConfig() {
+  JsonDocument request;
+  JsonArrayConst cards;
+  String reason;
+
+  if (gPortalServer.hasArg("plain") && gPortalServer.arg("plain").length() > 0) {
+    DeserializationError parseError =
+        deserializeJson(request, gPortalServer.arg("plain"));
+    if (parseError || !request.is<JsonObjectConst>()) {
+      writeConfigErrorResponse(400, "INVALID_REQUEST", "invalid json");
+      return;
+    }
+    if (!extractConfigCardsFromRequest(request.as<JsonObjectConst>(), cards,
+                                       reason)) {
+      writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
+      return;
+    }
+  } else {
+    JsonDocument staged;
+    if (!readJsonFromPath(kStagedConfigPath, staged) || !staged.is<JsonObjectConst>()) {
+      writeConfigErrorResponse(404, "NOT_FOUND", "no staged config available");
+      return;
+    }
+    if (!extractConfigCardsFromRequest(staged.as<JsonObjectConst>(), cards,
+                                       reason)) {
+      writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
+      return;
+    }
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  JsonObject validation = response["validation"].to<JsonObject>();
+  validation["errors"].to<JsonArray>();
+  validation["warnings"].to<JsonArray>();
+  String body;
+  serializeJson(response, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+bool rotateHistoryFiles() {
+  if (!copyFileIfExists(kSlot2ConfigPath, kSlot3ConfigPath)) return false;
+  if (!copyFileIfExists(kSlot1ConfigPath, kSlot2ConfigPath)) return false;
+  if (!copyFileIfExists(kLkgConfigPath, kSlot1ConfigPath)) return false;
+  if (!copyFileIfExists(kConfigPath, kLkgConfigPath)) return false;
+  rotateHistoryVersions();
+  return true;
+}
+
+void writeHistoryHead(JsonObject& head) {
+  head["lkgVersion"] = gLkgVersion;
+  head["slot1Version"] = gSlot1Version;
+  head["slot2Version"] = gSlot2Version;
+  head["slot3Version"] = gSlot3Version;
+}
+
+bool commitCards(JsonArrayConst cards, String& reason) {
+  LogicCard nextCards[TOTAL_CARDS];
+  if (!deserializeCardsFromArray(cards, nextCards)) {
+    reason = "failed to parse cards";
+    return false;
+  }
+
+  if (!rotateHistoryFiles()) {
+    reason = "failed to rotate history slots";
+    return false;
+  }
+
+  if (!saveCardsToPath(kConfigPath, nextCards)) {
+    reason = "failed to persist active config";
+    return false;
+  }
+
+  if (!applyCardsAsActiveConfig(nextCards)) {
+    reason = "failed to apply active config to runtime";
+    return false;
+  }
+
+  gConfigVersionCounter += 1;
+  formatVersion(gActiveVersion, sizeof(gActiveVersion), gConfigVersionCounter);
+  return true;
+}
+
+void handleHttpCommitConfig() {
+  JsonDocument request;
+  JsonArrayConst cards;
+  String reason;
+
+  if (gPortalServer.hasArg("plain") && gPortalServer.arg("plain").length() > 0) {
+    DeserializationError parseError =
+        deserializeJson(request, gPortalServer.arg("plain"));
+    if (parseError || !request.is<JsonObjectConst>()) {
+      writeConfigErrorResponse(400, "INVALID_REQUEST", "invalid json");
+      return;
+    }
+    if (!extractConfigCardsFromRequest(request.as<JsonObjectConst>(), cards,
+                                       reason)) {
+      writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
+      return;
+    }
+  } else {
+    JsonDocument staged;
+    if (!readJsonFromPath(kStagedConfigPath, staged) || !staged.is<JsonObjectConst>()) {
+      writeConfigErrorResponse(404, "NOT_FOUND", "no staged config available");
+      return;
+    }
+    if (!extractConfigCardsFromRequest(staged.as<JsonObjectConst>(), cards,
+                                       reason)) {
+      writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
+      return;
+    }
+  }
+
+  if (!commitCards(cards, reason)) {
+    writeConfigErrorResponse(500, "COMMIT_FAILED", reason);
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["activeVersion"] = gActiveVersion;
+  JsonObject head = response["historyHead"].to<JsonObject>();
+  writeHistoryHead(head);
+  response["requiresRestart"] = false;
+  response["error"] = nullptr;
+  String body;
+  serializeJson(response, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void handleHttpRestoreConfig() {
+  JsonDocument request;
+  DeserializationError parseError =
+      deserializeJson(request, gPortalServer.arg("plain"));
+  if (parseError || !request.is<JsonObjectConst>()) {
+    writeConfigErrorResponse(400, "INVALID_REQUEST", "invalid json");
+    return;
+  }
+
+  const char* source = request["source"] | "";
+  const char* restorePath = nullptr;
+  if (strcmp(source, "LKG") == 0) restorePath = kLkgConfigPath;
+  if (strcmp(source, "SLOT1") == 0) restorePath = kSlot1ConfigPath;
+  if (strcmp(source, "SLOT2") == 0) restorePath = kSlot2ConfigPath;
+  if (strcmp(source, "SLOT3") == 0) restorePath = kSlot3ConfigPath;
+  if (strcmp(source, "FACTORY") == 0) restorePath = kFactoryConfigPath;
+  if (restorePath == nullptr) {
+    writeConfigErrorResponse(400, "VALIDATION_FAILED", "invalid restore source");
+    return;
+  }
+  if (!LittleFS.exists(restorePath)) {
+    writeConfigErrorResponse(404, "NOT_FOUND", "restore source not found");
+    return;
+  }
+
+  JsonDocument doc;
+  if (!readJsonFromPath(restorePath, doc) || !doc.is<JsonArrayConst>()) {
+    writeConfigErrorResponse(500, "RESTORE_FAILED", "failed to load restore source");
+    return;
+  }
+  JsonArrayConst cards = doc.as<JsonArrayConst>();
+  String reason;
+  if (!validateConfigCardsArray(cards, reason)) {
+    writeConfigErrorResponse(500, "RESTORE_FAILED", reason);
+    return;
+  }
+  if (!commitCards(cards, reason)) {
+    writeConfigErrorResponse(500, "RESTORE_FAILED", reason);
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["restoredFrom"] = source;
+  response["activeVersion"] = gActiveVersion;
+  response["requiresRestart"] = false;
+  response["error"] = nullptr;
+  String body;
+  serializeJson(response, body);
+  gPortalServer.send(200, "application/json", body);
+}
+
+void initPortalServer() {
+  if (gPortalServerInitialized) return;
+  gPortalServer.on("/", HTTP_GET, handleHttpRoot);
+  gPortalServer.on("/config", HTTP_GET, handleHttpConfigPage);
+  gPortalServer.on("/settings", HTTP_GET, handleHttpSettingsPage);
+  gPortalServer.on("/api/snapshot", HTTP_GET, handleHttpSnapshot);
+  gPortalServer.on("/api/command", HTTP_POST, handleHttpCommand);
+  gPortalServer.on("/api/config/active", HTTP_GET, handleHttpGetActiveConfig);
+  gPortalServer.on("/api/config/staged/save", HTTP_POST,
+                   handleHttpStagedSaveConfig);
+  gPortalServer.on("/api/config/staged/validate", HTTP_POST,
+                   handleHttpStagedValidateConfig);
+  gPortalServer.on("/api/config/commit", HTTP_POST, handleHttpCommitConfig);
+  gPortalServer.on("/api/config/restore", HTTP_POST, handleHttpRestoreConfig);
+  gPortalServer.on("/api/settings", HTTP_GET, handleHttpGetSettings);
+  gPortalServer.on("/api/settings/wifi", HTTP_POST, handleHttpSaveSettingsWiFi);
+  gPortalServer.on("/api/settings/reconnect", HTTP_POST, handleHttpReconnectWiFi);
+  gPortalServer.on("/api/settings/reboot", HTTP_POST, handleHttpReboot);
+  gPortalServer.on("/favicon.ico", HTTP_GET,
+                   []() { gPortalServer.send(204, "text/plain", ""); });
+  gPortalServer.begin();
+  gPortalServerInitialized = true;
+  Serial.println("Portal HTTP server started on :80");
+}
+
+void handlePortalServerLoop() { gPortalServer.handleClient(); }
+
+void handleWebSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload,
+                          size_t length) {
+  if (type == WStype_CONNECTED) {
+    IPAddress ip = gWsServer.remoteIP(clientNum);
+    Serial.printf("WS client connected #%u from %u.%u.%u.%u\n", clientNum, ip[0],
+                  ip[1], ip[2], ip[3]);
+    return;
+  }
+  if (type == WStype_DISCONNECTED) {
+    Serial.printf("WS client disconnected #%u\n", clientNum);
+    return;
+  }
+  if (type != WStype_TEXT) return;
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(
+      doc, reinterpret_cast<const char*>(payload), length);
+  if (error || !doc.is<JsonObject>()) {
+    gWsServer.sendTXT(clientNum,
+                      "{\"type\":\"command_result\",\"ok\":false,"
+                      "\"error\":{\"code\":\"INVALID_REQUEST\"}}");
+    return;
+  }
+
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  const char* typeStr = root["type"] | "";
+  if (strcmp(typeStr, "command") != 0) {
+    gWsServer.sendTXT(clientNum,
+                      "{\"type\":\"command_result\",\"ok\":false,"
+                      "\"error\":{\"code\":\"INVALID_REQUEST\"}}");
+    return;
+  }
+
+  const char* requestId = root["requestId"] | "";
+  bool ok = applyCommand(root);
+
+  JsonDocument result;
+  result["type"] = "command_result";
+  result["schemaVersion"] = 1;
+  result["requestId"] = requestId;
+  result["ok"] = ok;
+  if (!ok) {
+    JsonObject err = result["error"].to<JsonObject>();
+    err["code"] = "COMMAND_REJECTED";
+  } else {
+    result["error"] = nullptr;
+  }
+  String body;
+  serializeJson(result, body);
+  gWsServer.sendTXT(clientNum, body);
+}
+
+void initWebSocketServer() {
+  if (gWsServerInitialized) return;
+  gWsServer.begin();
+  gWsServer.onEvent(handleWebSocketEvent);
+  gWsServerInitialized = true;
+  Serial.println("WebSocket server started on :81");
+}
+
+void handleWebSocketLoop() { gWsServer.loop(); }
+
+void publishRuntimeSnapshotWebSocket() {
+  static uint32_t lastPublishMs = 0;
+  static uint32_t lastSeq = 0;
+
+  SharedRuntimeSnapshot snapshot = {};
+  copySharedRuntimeSnapshot(snapshot);
+  uint32_t nowMs = millis();
+
+  bool hasUpdate = (snapshot.seq != lastSeq);
+  bool dueHeartbeat = (nowMs - lastPublishMs) >= 1000;
+  if (!hasUpdate && !dueHeartbeat) return;
+  if ((nowMs - lastPublishMs) < 200 && hasUpdate) return;
+
+  JsonDocument doc;
+  serializeRuntimeSnapshot(doc, nowMs);
+  String payload;
+  serializeJson(doc, payload);
+  gWsServer.broadcastTXT(payload);
+
+  lastPublishMs = nowMs;
+  lastSeq = snapshot.seq;
+}
+
 void configureHardwarePinsSafeState() {
   for (uint8_t i = 0; i < NUM_DO; ++i) {
     pinMode(DO_Pins[i], OUTPUT);
@@ -1101,14 +1250,27 @@ void configureHardwarePinsSafeState() {
 }
 
 void bootstrapCardsFromStorage() {
+  // Keep factory baseline aligned with current firmware defaults.
+  {
+    LogicCard factoryCards[TOTAL_CARDS];
+    initializeCardArraySafeDefaults(factoryCards);
+    saveCardsToPath(kFactoryConfigPath, factoryCards);
+  }
+
   initializeAllCardsSafeDefaults();
   if (loadLogicCardsFromLittleFS()) {
+    strncpy(gActiveVersion, "v1", sizeof(gActiveVersion) - 1);
+    gActiveVersion[sizeof(gActiveVersion) - 1] = '\0';
+    gConfigVersionCounter = 1;
     printLogicCardsJsonToSerial("Loaded JSON from /config.json:");
     return;
   }
 
   initializeAllCardsSafeDefaults();
   if (saveLogicCardsToLittleFS()) {
+    strncpy(gActiveVersion, "v1", sizeof(gActiveVersion) - 1);
+    gActiveVersion[sizeof(gActiveVersion) - 1] = '\0';
+    gConfigVersionCounter = 1;
     printLogicCardsJsonToSerial("Saved default JSON to /config.json:");
   } else {
     Serial.println("Failed to save default JSON to /config.json");
@@ -1118,6 +1280,456 @@ void bootstrapCardsFromStorage() {
 LogicCard* getCardById(uint8_t id) {
   if (id >= TOTAL_CARDS) return nullptr;
   return &logicCards[id];
+}
+
+bool isDigitalInputCard(uint8_t id) { return id < DO_START; }
+
+bool isDigitalOutputCard(uint8_t id) { return id >= DO_START && id < AI_START; }
+
+bool isAnalogInputCard(uint8_t id) { return id >= AI_START && id < SIO_START; }
+
+bool isSoftIOCard(uint8_t id) { return id >= SIO_START && id < TOTAL_CARDS; }
+
+bool isInputCard(uint8_t id) {
+  return isDigitalInputCard(id) || isAnalogInputCard(id);
+}
+
+void initializeRuntimeControlState() {
+  strncpy(gUserSsid, kDefaultUserSsid, sizeof(gUserSsid) - 1);
+  gUserSsid[sizeof(gUserSsid) - 1] = '\0';
+  strncpy(gUserPassword, kDefaultUserPassword, sizeof(gUserPassword) - 1);
+  gUserPassword[sizeof(gUserPassword) - 1] = '\0';
+
+  gRunMode = RUN_NORMAL;
+  gScanCursor = 0;
+  gStepRequested = false;
+  gBreakpointPaused = false;
+  gTestModeActive = false;
+  gGlobalOutputMask = false;
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    gCardBreakpoint[i] = false;
+    gCardOutputMask[i] = false;
+    gCardInputSource[i] = InputSource_Real;
+    gCardForcedAIValue[i] = 0;
+  }
+}
+
+bool isOutputMasked(uint8_t cardId) {
+  if (!gTestModeActive) return false;
+  if (!isDigitalOutputCard(cardId)) return false;
+  return gGlobalOutputMask || gCardOutputMask[cardId];
+}
+
+bool setRunModeCommand(runMode mode) {
+  gRunMode = mode;
+  if (mode != RUN_BREAKPOINT) {
+    gBreakpointPaused = false;
+  }
+  return true;
+}
+
+void serializeCardsToArray(const LogicCard* sourceCards, JsonArray& array) {
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonObject obj = array.add<JsonObject>();
+    serializeCardToJson(sourceCards[i], obj);
+  }
+}
+
+void initializeCardArraySafeDefaults(LogicCard* cards) {
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    initializeCardSafeDefaults(cards[i], i);
+  }
+}
+
+bool deserializeCardsFromArray(JsonArrayConst array, LogicCard* outCards) {
+  if (array.size() != TOTAL_CARDS) return false;
+  initializeCardArraySafeDefaults(outCards);
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonVariantConst item = array[i];
+    if (!item.is<JsonObjectConst>()) return false;
+    deserializeCardFromJson(item.as<JsonObjectConst>(), outCards[i]);
+  }
+  return true;
+}
+
+bool validateConfigCardsArray(JsonArrayConst array, String& reason) {
+  if (array.size() != TOTAL_CARDS) {
+    reason = "cards size mismatch";
+    return false;
+  }
+
+  auto cardTypeFromString = [](const char* s) -> logicCardType {
+    return parseOrDefault(s, DigitalInput);
+  };
+  auto isModeAllowed = [](logicCardType type, const char* mode) -> bool {
+    if (mode == nullptr) return false;
+    if (type == DigitalInput) {
+      return strcmp(mode, "Mode_DI_Rising") == 0 ||
+             strcmp(mode, "Mode_DI_Falling") == 0 ||
+             strcmp(mode, "Mode_DI_Change") == 0;
+    }
+    if (type == AnalogInput) return strcmp(mode, "Mode_AI_Continuous") == 0;
+    if (type == DigitalOutput || type == SoftIO) {
+      return strcmp(mode, "Mode_DO_Normal") == 0 ||
+             strcmp(mode, "Mode_DO_Immediate") == 0 ||
+             strcmp(mode, "Mode_DO_Gated") == 0;
+    }
+    return false;
+  };
+  auto isAlwaysOp = [](const char* op) -> bool {
+    return op != nullptr &&
+           (strcmp(op, "Op_AlwaysTrue") == 0 ||
+            strcmp(op, "Op_AlwaysFalse") == 0);
+  };
+  auto isNumericOp = [](const char* op) -> bool {
+    return op != nullptr &&
+           (strcmp(op, "Op_GT") == 0 || strcmp(op, "Op_LT") == 0 ||
+            strcmp(op, "Op_EQ") == 0 || strcmp(op, "Op_NEQ") == 0 ||
+            strcmp(op, "Op_GTE") == 0 || strcmp(op, "Op_LTE") == 0);
+  };
+  auto isStateOp = [](const char* op) -> bool {
+    return op != nullptr &&
+           (strcmp(op, "Op_LogicalTrue") == 0 ||
+            strcmp(op, "Op_LogicalFalse") == 0 ||
+            strcmp(op, "Op_PhysicalOn") == 0 ||
+            strcmp(op, "Op_PhysicalOff") == 0);
+  };
+  auto isTriggerOp = [](const char* op) -> bool {
+    return op != nullptr &&
+           (strcmp(op, "Op_Triggered") == 0 ||
+            strcmp(op, "Op_TriggerCleared") == 0);
+  };
+  auto isProcessOp = [](const char* op) -> bool {
+    return op != nullptr &&
+           (strcmp(op, "Op_Running") == 0 ||
+            strcmp(op, "Op_Finished") == 0 ||
+            strcmp(op, "Op_Stopped") == 0);
+  };
+  auto isOperatorAllowedForTarget = [&](logicCardType targetType,
+                                        const char* op) -> bool {
+    if (isAlwaysOp(op)) return true;
+    if (targetType == AnalogInput) return isNumericOp(op);
+    if (targetType == DigitalInput) return isStateOp(op) || isTriggerOp(op) || isNumericOp(op);
+    if (targetType == DigitalOutput || targetType == SoftIO) {
+      return isStateOp(op) || isTriggerOp(op) || isNumericOp(op) ||
+             isProcessOp(op);
+    }
+    return false;
+  };
+
+  bool seenId[TOTAL_CARDS] = {};
+  logicCardType typeById[TOTAL_CARDS] = {};
+  bool typeKnown[TOTAL_CARDS] = {};
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonVariantConst item = array[i];
+    if (!item.is<JsonObjectConst>()) {
+      reason = "cards[] item is not object";
+      return false;
+    }
+    JsonObjectConst card = item.as<JsonObjectConst>();
+    uint8_t id = card["id"] | 255;
+    if (id >= TOTAL_CARDS) {
+      reason = "card id out of range";
+      return false;
+    }
+    if (seenId[id]) {
+      reason = "duplicate card id";
+      return false;
+    }
+    seenId[id] = true;
+    typeById[id] = cardTypeFromString(card["type"] | "DigitalInput");
+    typeKnown[id] = true;
+
+    uint8_t setAId = card["setA_ID"] | 255;
+    uint8_t setBId = card["setB_ID"] | 255;
+    uint8_t resetAId = card["resetA_ID"] | 255;
+    uint8_t resetBId = card["resetB_ID"] | 255;
+    if (setAId >= TOTAL_CARDS || setBId >= TOTAL_CARDS ||
+        resetAId >= TOTAL_CARDS || resetBId >= TOTAL_CARDS) {
+      reason = "set/reset reference id out of range";
+      return false;
+    }
+  }
+
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    JsonObjectConst card = array[i].as<JsonObjectConst>();
+    uint8_t id = card["id"] | 255;
+    if (id >= TOTAL_CARDS || !typeKnown[id]) {
+      reason = "card id/type map error";
+      return false;
+    }
+
+    const char* mode = card["mode"] | "";
+    if (!isModeAllowed(typeById[id], mode)) {
+      reason = "mode not valid for card type";
+      return false;
+    }
+
+    uint8_t setAId = card["setA_ID"] | 255;
+    uint8_t setBId = card["setB_ID"] | 255;
+    uint8_t resetAId = card["resetA_ID"] | 255;
+    uint8_t resetBId = card["resetB_ID"] | 255;
+    const char* setAOp = card["setA_Operator"] | "";
+    const char* setBOp = card["setB_Operator"] | "";
+    const char* resetAOp = card["resetA_Operator"] | "";
+    const char* resetBOp = card["resetB_Operator"] | "";
+
+    if (!isOperatorAllowedForTarget(typeById[setAId], setAOp) ||
+        !isOperatorAllowedForTarget(typeById[setBId], setBOp) ||
+        !isOperatorAllowedForTarget(typeById[resetAId], resetAOp) ||
+        !isOperatorAllowedForTarget(typeById[resetBId], resetBOp)) {
+      reason = "operator not valid for referenced card type";
+      return false;
+    }
+  }
+
+  reason = "";
+  return true;
+}
+
+bool writeJsonToPath(const char* path, JsonDocument& doc) {
+  File file = LittleFS.open(path, "w");
+  if (!file) return false;
+  size_t written = serializeJson(doc, file);
+  file.close();
+  return written > 0;
+}
+
+bool readJsonFromPath(const char* path, JsonDocument& doc) {
+  File file = LittleFS.open(path, "r");
+  if (!file) return false;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  return !error;
+}
+
+bool saveCardsToPath(const char* path, const LogicCard* sourceCards) {
+  JsonDocument doc;
+  JsonArray cards = doc.to<JsonArray>();
+  serializeCardsToArray(sourceCards, cards);
+  return writeJsonToPath(path, doc);
+}
+
+bool loadCardsFromPath(const char* path, LogicCard* outCards) {
+  JsonDocument doc;
+  if (!readJsonFromPath(path, doc)) return false;
+  if (!doc.is<JsonArrayConst>()) return false;
+  return deserializeCardsFromArray(doc.as<JsonArrayConst>(), outCards);
+}
+
+bool copyFileIfExists(const char* srcPath, const char* dstPath) {
+  if (!LittleFS.exists(srcPath)) return true;
+  File src = LittleFS.open(srcPath, "r");
+  if (!src) return false;
+  File dst = LittleFS.open(dstPath, "w");
+  if (!dst) {
+    src.close();
+    return false;
+  }
+  uint8_t buffer[256];
+  while (true) {
+    size_t n = src.read(buffer, sizeof(buffer));
+    if (n == 0) break;
+    if (dst.write(buffer, n) != n) {
+      src.close();
+      dst.close();
+      return false;
+    }
+  }
+  src.close();
+  dst.close();
+  return true;
+}
+
+void formatVersion(char* out, size_t outSize, uint32_t version) {
+  snprintf(out, outSize, "v%lu", static_cast<unsigned long>(version));
+}
+
+bool pauseKernelForConfigApply(uint32_t timeoutMs) {
+  gKernelPauseRequested = true;
+  uint32_t start = millis();
+  while (!gKernelPaused && (millis() - start) < timeoutMs) {
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+  return gKernelPaused;
+}
+
+void resumeKernelAfterConfigApply() { gKernelPauseRequested = false; }
+
+void rotateHistoryVersions() {
+  strncpy(gSlot3Version, gSlot2Version, sizeof(gSlot3Version) - 1);
+  gSlot3Version[sizeof(gSlot3Version) - 1] = '\0';
+  strncpy(gSlot2Version, gSlot1Version, sizeof(gSlot2Version) - 1);
+  gSlot2Version[sizeof(gSlot2Version) - 1] = '\0';
+  strncpy(gSlot1Version, gLkgVersion, sizeof(gSlot1Version) - 1);
+  gSlot1Version[sizeof(gSlot1Version) - 1] = '\0';
+  strncpy(gLkgVersion, gActiveVersion, sizeof(gLkgVersion) - 1);
+  gLkgVersion[sizeof(gLkgVersion) - 1] = '\0';
+}
+
+bool applyCardsAsActiveConfig(const LogicCard* newCards) {
+  if (!pauseKernelForConfigApply(1000)) {
+    resumeKernelAfterConfigApply();
+    return false;
+  }
+  memcpy(logicCards, newCards, sizeof(logicCards));
+  memset(gPrevSetCondition, 0, sizeof(gPrevSetCondition));
+  memset(gPrevDISample, 0, sizeof(gPrevDISample));
+  memset(gPrevDIPrimed, 0, sizeof(gPrevDIPrimed));
+  updateSharedRuntimeSnapshot(millis(), false);
+  resumeKernelAfterConfigApply();
+  return true;
+}
+
+bool extractConfigCardsFromRequest(JsonObjectConst root, JsonArrayConst& outCards,
+                                   String& reason) {
+  if (!root["config"].is<JsonObjectConst>()) {
+    reason = "missing config object";
+    return false;
+  }
+  JsonObjectConst config = root["config"].as<JsonObjectConst>();
+  if (!config["cards"].is<JsonArrayConst>()) {
+    reason = "missing config.cards array";
+    return false;
+  }
+  outCards = config["cards"].as<JsonArrayConst>();
+  if (!validateConfigCardsArray(outCards, reason)) return false;
+  reason = "";
+  return true;
+}
+
+void writeConfigErrorResponse(int statusCode, const char* code,
+                              const String& message) {
+  JsonDocument doc;
+  doc["ok"] = false;
+  JsonObject error = doc["error"].to<JsonObject>();
+  error["code"] = code;
+  error["message"] = message;
+  String body;
+  serializeJson(doc, body);
+  gPortalServer.send(statusCode, "application/json", body);
+}
+
+bool requestStepCommand() {
+  gStepRequested = true;
+  gBreakpointPaused = false;
+  gRunMode = RUN_STEP;
+  return true;
+}
+
+bool setBreakpointCommand(uint8_t cardId, bool enabled) {
+  if (cardId >= TOTAL_CARDS) return false;
+  gCardBreakpoint[cardId] = enabled;
+  if (!enabled) gBreakpointPaused = false;
+  return true;
+}
+
+bool setTestModeCommand(bool active) {
+  gTestModeActive = active;
+  if (!active) {
+    for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+      gCardInputSource[i] = InputSource_Real;
+      gCardOutputMask[i] = false;
+      gCardForcedAIValue[i] = 0;
+    }
+    gGlobalOutputMask = false;
+  }
+  return true;
+}
+
+bool setOutputMaskCommand(uint8_t cardId, bool masked) {
+  if (cardId >= TOTAL_CARDS) return false;
+  if (!isDigitalOutputCard(cardId)) return false;
+  gCardOutputMask[cardId] = masked;
+  return true;
+}
+
+bool setGlobalOutputMaskCommand(bool masked) {
+  gGlobalOutputMask = masked;
+  return true;
+}
+
+bool setInputForceCommand(uint8_t cardId, inputSourceMode mode,
+                          uint32_t forcedValue) {
+  if (cardId >= TOTAL_CARDS) return false;
+  if (!isInputCard(cardId)) return false;
+
+  if (isDigitalInputCard(cardId)) {
+    if (mode == InputSource_ForcedValue) return false;
+  } else if (isAnalogInputCard(cardId)) {
+    if (mode == InputSource_ForcedHigh || mode == InputSource_ForcedLow) {
+      return false;
+    }
+  }
+
+  gCardInputSource[cardId] = mode;
+  if (mode == InputSource_ForcedValue) gCardForcedAIValue[cardId] = forcedValue;
+  if (mode == InputSource_Real) gCardForcedAIValue[cardId] = 0;
+  return true;
+}
+
+bool enqueueKernelCommand(const KernelCommand& command) {
+  if (gKernelCommandQueue == nullptr) return false;
+  return xQueueSend(gKernelCommandQueue, &command, 0) == pdTRUE;
+}
+
+bool applyKernelCommand(const KernelCommand& command) {
+  switch (command.type) {
+    case KernelCmd_SetRunMode:
+      return setRunModeCommand(command.mode);
+    case KernelCmd_StepOnce:
+      return requestStepCommand();
+    case KernelCmd_SetBreakpoint:
+      return setBreakpointCommand(command.cardId, command.flag);
+    case KernelCmd_SetTestMode:
+      return setTestModeCommand(command.flag);
+    case KernelCmd_SetInputForce:
+      return setInputForceCommand(command.cardId, command.inputMode,
+                                  command.value);
+    case KernelCmd_SetOutputMask:
+      return setOutputMaskCommand(command.cardId, command.flag);
+    case KernelCmd_SetOutputMaskGlobal:
+      return setGlobalOutputMaskCommand(command.flag);
+    default:
+      return false;
+  }
+}
+
+void processKernelCommandQueue() {
+  if (gKernelCommandQueue == nullptr) return;
+  KernelCommand command = {};
+  while (xQueueReceive(gKernelCommandQueue, &command, 0) == pdTRUE) {
+    applyKernelCommand(command);
+  }
+}
+
+void updateSharedRuntimeSnapshot(uint32_t nowMs, bool incrementSeq) {
+  portENTER_CRITICAL(&gSnapshotMux);
+  if (incrementSeq) gSharedSnapshot.seq += 1;
+  gSharedSnapshot.tsMs = nowMs;
+  gSharedSnapshot.mode = gRunMode;
+  gSharedSnapshot.testModeActive = gTestModeActive;
+  gSharedSnapshot.globalOutputMask = gGlobalOutputMask;
+  gSharedSnapshot.breakpointPaused = gBreakpointPaused;
+  gSharedSnapshot.scanCursor = gScanCursor;
+  memcpy(gSharedSnapshot.cards, logicCards, sizeof(logicCards));
+  memcpy(gSharedSnapshot.inputSource, gCardInputSource, sizeof(gCardInputSource));
+  memcpy(gSharedSnapshot.forcedAIValue, gCardForcedAIValue,
+         sizeof(gCardForcedAIValue));
+  memcpy(gSharedSnapshot.outputMaskLocal, gCardOutputMask,
+         sizeof(gCardOutputMask));
+  portEXIT_CRITICAL(&gSnapshotMux);
+}
+
+uint8_t scanOrderCardIdFromCursor(uint16_t cursor) {
+  uint16_t pos = (TOTAL_CARDS == 0) ? 0 : (cursor % TOTAL_CARDS);
+  if (pos < NUM_DI) return static_cast<uint8_t>(DI_START + pos);
+  pos -= NUM_DI;
+  if (pos < NUM_AI) return static_cast<uint8_t>(AI_START + pos);
+  pos -= NUM_AI;
+  if (pos < NUM_SIO) return static_cast<uint8_t>(SIO_START + pos);
+  pos -= NUM_SIO;
+  return static_cast<uint8_t>(DO_START + pos);
 }
 
 bool isDoRunningState(cardState state) {
@@ -1191,7 +1803,16 @@ void resetDIRuntime(LogicCard& card) {
 
 void processDICard(LogicCard& card, uint32_t nowMs) {
   bool sample = false;
-  if (card.hwPin != 255) {
+  inputSourceMode sourceMode = InputSource_Real;
+  if (card.id < TOTAL_CARDS && gTestModeActive) {
+    sourceMode = gCardInputSource[card.id];
+  }
+
+  if (sourceMode == InputSource_ForcedHigh) {
+    sample = true;
+  } else if (sourceMode == InputSource_ForcedLow) {
+    sample = false;
+  } else if (card.hwPin != 255) {
     sample = (digitalRead(card.hwPin) == HIGH);
   }
   if (card.invert) sample = !sample;
@@ -1272,7 +1893,14 @@ uint32_t clampUInt32(uint32_t value, uint32_t lo, uint32_t hi) {
 
 void processAICard(LogicCard& card) {
   uint32_t raw = 0;
-  if (card.hwPin != 255) {
+  inputSourceMode sourceMode = InputSource_Real;
+  if (card.id < TOTAL_CARDS && gTestModeActive) {
+    sourceMode = gCardInputSource[card.id];
+  }
+
+  if (sourceMode == InputSource_ForcedValue) {
+    raw = gCardForcedAIValue[card.id];
+  } else if (card.hwPin != 255) {
     raw = static_cast<uint32_t>(analogRead(card.hwPin));
   }
 
@@ -1314,9 +1942,11 @@ void forceDOIdle(LogicCard& card) {
   card.state = State_DO_Idle;
 }
 
-void driveDOHardware(const LogicCard& card, bool driveHardware, bool level) {
+void driveDOHardware(const LogicCard& card, bool driveHardware, bool level,
+                     bool masked) {
   if (!driveHardware) return;
   if (card.hwPin == 255) return;
+  if (masked) return;
   digitalWrite(card.hwPin, level ? HIGH : LOW);
 }
 
@@ -1338,7 +1968,7 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
 
   if (resetCondition) {
     forceDOIdle(card);
-    driveDOHardware(card, driveHardware, false);
+    driveDOHardware(card, driveHardware, false, isOutputMasked(card.id));
     return;
   }
 
@@ -1361,7 +1991,7 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
   if (card.mode == Mode_DO_Gated && isDoRunningState(card.state) &&
       !setCondition) {
     forceDOIdle(card);
-    driveDOHardware(card, driveHardware, false);
+    driveDOHardware(card, driveHardware, false, isOutputMasked(card.id));
     return;
   }
 
@@ -1413,50 +2043,253 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
   }
 
   card.physicalState = effectiveOutput;
-  driveDOHardware(card, driveHardware, effectiveOutput);
+  driveDOHardware(card, driveHardware, effectiveOutput, isOutputMasked(card.id));
 }
 
 void processSIOCard(LogicCard& card, uint32_t nowMs) {
   processDOCard(card, nowMs, false);
 }
 
-void runScanCycle(uint32_t nowMs) {
-  for (uint8_t i = DI_START; i < DO_START; ++i) {
-    processDICard(logicCards[i], nowMs);
+void processCardById(uint8_t cardId, uint32_t nowMs) {
+  if (cardId >= TOTAL_CARDS) return;
+  if (isDigitalInputCard(cardId)) {
+    processDICard(logicCards[cardId], nowMs);
+    return;
   }
-  for (uint8_t i = AI_START; i < SIO_START; ++i) {
-    processAICard(logicCards[i]);
+  if (isAnalogInputCard(cardId)) {
+    processAICard(logicCards[cardId]);
+    return;
   }
-  for (uint8_t i = SIO_START; i < TOTAL_CARDS; ++i) {
-    processSIOCard(logicCards[i], nowMs);
+  if (isSoftIOCard(cardId)) {
+    processSIOCard(logicCards[cardId], nowMs);
+    return;
   }
-  for (uint8_t i = DO_START; i < AI_START; ++i) {
-    processDOCard(logicCards[i], nowMs, true);
+  if (isDigitalOutputCard(cardId)) {
+    processDOCard(logicCards[cardId], nowMs, true);
+  }
+}
+
+void processOneScanOrderedCard(uint32_t nowMs, bool honorBreakpoints) {
+  uint8_t cardId = scanOrderCardIdFromCursor(gScanCursor);
+  processCardById(cardId, nowMs);
+
+  gScanCursor = static_cast<uint16_t>((gScanCursor + 1) % TOTAL_CARDS);
+
+  if (honorBreakpoints && gRunMode == RUN_BREAKPOINT && gCardBreakpoint[cardId]) {
+    gBreakpointPaused = true;
+  }
+}
+
+void runFullScanCycle(uint32_t nowMs, bool honorBreakpoints) {
+  for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
+    processOneScanOrderedCard(nowMs, honorBreakpoints);
+    if (gBreakpointPaused) return;
+  }
+}
+
+void runEngineIteration(uint32_t nowMs, uint32_t& lastScanMs) {
+  processKernelCommandQueue();
+  if (gKernelPauseRequested) {
+    gKernelPaused = true;
+    updateSharedRuntimeSnapshot(nowMs, false);
+    return;
+  }
+  gKernelPaused = false;
+  if (lastScanMs == 0) {
+    lastScanMs = nowMs;
+  }
+
+  uint32_t scanInterval = (gRunMode == RUN_SLOW) ? SLOW_SCAN_INTERVAL_MS
+                                                 : SCAN_INTERVAL_MS;
+  if ((nowMs - lastScanMs) < scanInterval) {
+    updateSharedRuntimeSnapshot(nowMs, false);
+    return;
+  }
+  lastScanMs += scanInterval;
+
+  if (gRunMode == RUN_STEP) {
+    if (gStepRequested) {
+      processOneScanOrderedCard(nowMs, false);
+      gStepRequested = false;
+      updateSharedRuntimeSnapshot(nowMs, true);
+      return;
+    }
+    updateSharedRuntimeSnapshot(nowMs, false);
+    return;
+  }
+
+  if (gRunMode == RUN_BREAKPOINT && gBreakpointPaused) {
+    updateSharedRuntimeSnapshot(nowMs, false);
+    return;
+  }
+
+  runFullScanCycle(nowMs, gRunMode == RUN_BREAKPOINT);
+  updateSharedRuntimeSnapshot(nowMs, true);
+}
+
+void core0EngineTask(void* param) {
+  (void)param;
+  uint32_t lastScanMs = 0;
+  for (;;) {
+    runEngineIteration(millis(), lastScanMs);
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+void core1PortalTask(void* param) {
+  (void)param;
+  bool wifiOk = connectWiFiWithPolicy();
+  if (wifiOk) {
+    initPortalServer();
+    initWebSocketServer();
+  }
+  for (;;) {
+    if (wifiOk) {
+      if (gPortalReconnectRequested) {
+        gPortalReconnectRequested = false;
+        wifiOk = connectWiFiWithPolicy();
+        if (wifiOk) {
+          initPortalServer();
+          initWebSocketServer();
+        }
+      }
+      handlePortalServerLoop();
+      handleWebSocketLoop();
+      publishRuntimeSnapshotWebSocket();
+      vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    // Optional low-frequency retry in offline mode.
+    static uint32_t lastRetryMs = 0;
+    uint32_t nowMs = millis();
+    if (nowMs - lastRetryMs >= 30000) {
+      lastRetryMs = nowMs;
+      wifiOk = connectWiFiWithPolicy();
+      if (wifiOk) {
+        initPortalServer();
+        initWebSocketServer();
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
 void setup() {
   Serial.begin(115200);
   configureHardwarePinsSafeState();
+  initializeRuntimeControlState();
 
-  if (!LittleFS.begin(true)) {
+  bool fsReady = LittleFS.begin(true);
+  if (!fsReady) {
     Serial.println("LittleFS mount failed");
     initializeAllCardsSafeDefaults();
+  } else {
+    bootstrapCardsFromStorage();
+  }
+
+  gKernelCommandQueue = xQueueCreate(16, sizeof(KernelCommand));
+  if (gKernelCommandQueue == nullptr) {
+    Serial.println("Failed to create kernel command queue");
     return;
   }
 
-  bootstrapCardsFromStorage();
+  updateSharedRuntimeSnapshot(millis(), false);
+
+  xTaskCreatePinnedToCore(core0EngineTask, "core0_engine", 8192, nullptr, 3,
+                          &gCore0TaskHandle, 0);
+  xTaskCreatePinnedToCore(core1PortalTask, "core1_portal", 8192, nullptr, 1,
+                          &gCore1TaskHandle, 1);
 }
 
 void loop() {
-  static uint32_t lastScanMs = 0;
-  uint32_t nowMs = millis();
-  if (lastScanMs == 0) {
-    lastScanMs = nowMs;
+  vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+bool applyCommand(JsonObjectConst command) {
+  const char* name = command["name"] | "";
+  JsonObjectConst payload = command["payload"].as<JsonObjectConst>();
+  KernelCommand kernelCommand = {};
+
+  if (strcmp(name, "set_run_mode") == 0) {
+    const char* mode = payload["mode"] | "RUN_NORMAL";
+    kernelCommand.type = KernelCmd_SetRunMode;
+    bool modeMatched = false;
+    if (strcmp(mode, "RUN_NORMAL") == 0) {
+      kernelCommand.mode = RUN_NORMAL;
+      modeMatched = true;
+    }
+    if (strcmp(mode, "RUN_STEP") == 0) {
+      kernelCommand.mode = RUN_STEP;
+      modeMatched = true;
+    }
+    if (strcmp(mode, "RUN_BREAKPOINT") == 0) {
+      kernelCommand.mode = RUN_BREAKPOINT;
+      modeMatched = true;
+    }
+    if (strcmp(mode, "RUN_SLOW") == 0) {
+      kernelCommand.mode = RUN_SLOW;
+      modeMatched = true;
+    }
+    if (!modeMatched) return false;
+    return enqueueKernelCommand(kernelCommand);
   }
 
-  if ((nowMs - lastScanMs) >= SCAN_INTERVAL_MS) {
-    runScanCycle(nowMs);
-    lastScanMs += SCAN_INTERVAL_MS;
+  if (strcmp(name, "step_once") == 0) {
+    kernelCommand.type = KernelCmd_StepOnce;
+    return enqueueKernelCommand(kernelCommand);
   }
+
+  if (strcmp(name, "set_breakpoint") == 0) {
+    kernelCommand.type = KernelCmd_SetBreakpoint;
+    kernelCommand.cardId = payload["cardId"] | 255;
+    kernelCommand.flag = payload["enabled"] | false;
+    return enqueueKernelCommand(kernelCommand);
+  }
+
+  if (strcmp(name, "set_test_mode") == 0) {
+    kernelCommand.type = KernelCmd_SetTestMode;
+    kernelCommand.flag = payload["active"] | false;
+    return enqueueKernelCommand(kernelCommand);
+  }
+
+  if (strcmp(name, "set_input_force") == 0) {
+    uint8_t cardId = payload["cardId"] | 255;
+    bool forced = payload["forced"] | false;
+    kernelCommand.type = KernelCmd_SetInputForce;
+    kernelCommand.cardId = cardId;
+    if (!forced) {
+      kernelCommand.inputMode = InputSource_Real;
+      kernelCommand.value = 0;
+      return enqueueKernelCommand(kernelCommand);
+    }
+
+    if (isDigitalInputCard(cardId)) {
+      bool value = payload["value"] | false;
+      kernelCommand.inputMode =
+          value ? InputSource_ForcedHigh : InputSource_ForcedLow;
+      kernelCommand.value = 0;
+      return enqueueKernelCommand(kernelCommand);
+    }
+    if (isAnalogInputCard(cardId)) {
+      kernelCommand.inputMode = InputSource_ForcedValue;
+      kernelCommand.value = payload["value"] | 0;
+      return enqueueKernelCommand(kernelCommand);
+    }
+    return false;
+  }
+
+  if (strcmp(name, "set_output_mask") == 0) {
+    kernelCommand.type = KernelCmd_SetOutputMask;
+    kernelCommand.cardId = payload["cardId"] | 255;
+    kernelCommand.flag = payload["masked"] | false;
+    return enqueueKernelCommand(kernelCommand);
+  }
+
+  if (strcmp(name, "set_output_mask_global") == 0) {
+    kernelCommand.type = KernelCmd_SetOutputMaskGlobal;
+    kernelCommand.flag = payload["masked"] | false;
+    return enqueueKernelCommand(kernelCommand);
+  }
+
+  return false;
 }
