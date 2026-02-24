@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AdvancedTimer Settings</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --line: #334155;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --ok: #10b981;
+        --bad: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: radial-gradient(circle at top, #1e293b, var(--bg));
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      input {
+        width: 100%;
+        background: #0b1220;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      .field {
+        flex: 1 1 280px;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: #1f2937;
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+      .muted { color: var(--muted); }
+      h1 { margin: 0 0 10px; font-size: 20px; }
+      h2 { margin: 0 0 10px; font-size: 16px; }
+      .status { min-height: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <h1>Settings</h1>
+        <div class="row">
+          <button id="btnBack">Back To Home</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>WiFi</h2>
+        <div class="row">
+          <div class="field">
+            <label>Master SSID (fixed)</label>
+            <input id="masterSsid" disabled />
+          </div>
+          <div class="field">
+            <label>Master Password (fixed)</label>
+            <input id="masterPassword" type="password" value="********" disabled />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>User SSID (configurable)</label>
+            <input id="userSsid" />
+          </div>
+          <div class="field">
+            <label>User Password (configurable)</label>
+            <input id="userPassword" type="password" />
+          </div>
+        </div>
+        <div class="row">
+          <button id="btnSaveWifi">Save WiFi Settings</button>
+          <button id="btnReconnect">Reconnect WiFi</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>System</h2>
+        <div class="row">
+          <button id="btnReboot">Reboot Device</button>
+        </div>
+        <p class="muted" id="firmwareVersion"></p>
+        <p class="muted" id="wifiStatus"></p>
+        <p id="status" class="status"></p>
+      </div>
+    </div>
+
+    <script>
+      function setStatus(text, ok) {
+        const el = document.getElementById("status");
+        el.textContent = text;
+        el.className = `status ${ok ? "ok" : "bad"}`;
+      }
+
+      async function loadSettings() {
+        try {
+          const res = await fetch("/api/settings");
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            setStatus("Failed to load settings", false);
+            return;
+          }
+          document.getElementById("masterSsid").value = data.masterSsid || "";
+          document.getElementById("userSsid").value = data.userSsid || "";
+          document.getElementById("userPassword").value = data.userPassword || "";
+          document.getElementById("firmwareVersion").textContent =
+            `Firmware: ${data.firmwareVersion || "unknown"}`;
+          document.getElementById("wifiStatus").textContent =
+            `WiFi: ${data.wifiConnected ? "Connected" : "Offline"} ${data.wifiIp || ""}`;
+        } catch (_err) {
+          setStatus("Settings API not reachable", false);
+        }
+      }
+
+      async function postJson(url, body) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {})
+        });
+        return res.ok;
+      }
+
+      document.getElementById("btnBack").addEventListener("click", () => {
+        window.location.href = "/";
+      });
+
+      document.getElementById("btnSaveWifi").addEventListener("click", async () => {
+        const userSsid = document.getElementById("userSsid").value.trim();
+        const userPassword = document.getElementById("userPassword").value;
+        const ok = await postJson("/api/settings/wifi", { userSsid, userPassword });
+        setStatus(ok ? "WiFi settings saved" : "Failed to save WiFi settings", ok);
+      });
+
+      document.getElementById("btnReconnect").addEventListener("click", async () => {
+        const ok = await postJson("/api/settings/reconnect", {});
+        setStatus(ok ? "Reconnect requested" : "Reconnect request failed", ok);
+      });
+
+      document.getElementById("btnReboot").addEventListener("click", async () => {
+        const ok = await postJson("/api/settings/reboot", {});
+        setStatus(ok ? "Reboot requested" : "Reboot request failed", ok);
+      });
+
+      loadSettings();
+    </script>
+  </body>
+</html>

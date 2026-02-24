@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AdvancedTimer Portal</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --line: #334155;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --ok: #10b981;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: radial-gradient(circle at top, #1e293b, var(--bg));
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .header {
+        position: sticky;
+        top: 0;
+        background: rgba(17, 24, 39, 0.95);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        border: 1px solid var(--line);
+        padding: 6px 10px;
+        border-radius: 999px;
+        color: var(--muted);
+      }
+      .chip strong { color: var(--text); }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        background: var(--panel);
+        margin-bottom: 12px;
+      }
+      h1, h2 {
+        margin: 0 0 10px;
+        font-weight: 600;
+      }
+      h1 { font-size: 20px; }
+      h2 { font-size: 16px; }
+      button {
+        border: 1px solid var(--line);
+        background: #1f2937;
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover { border-color: #64748b; }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .small { color: var(--muted); font-size: 13px; }
+      .status-ok { color: var(--ok); }
+      .status-warn { color: var(--warn); }
+      .status-bad { color: var(--bad); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="header">
+        <h1>AdvancedTimer Portal</h1>
+        <div class="row">
+          <div class="chip">Mode: <strong id="runMode">RUN_NORMAL</strong></div>
+          <div class="chip">Test: <strong id="testMode">OFF</strong></div>
+          <div class="chip">WiFi: <strong id="wifiState">Unknown</strong></div>
+          <div class="chip">WS: <strong id="wsState">Down</strong></div>
+          <div class="chip">Snapshot: <strong id="snapshotSeq">0</strong></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Quick Actions</h2>
+        <div class="row">
+          <button id="btnRefresh">Refresh Snapshot</button>
+          <button id="btnStep">Step Once</button>
+          <button id="btnTest">Toggle Test Mode</button>
+          <button id="btnMaskAll">Toggle Global Output Mask</button>
+          <button id="btnConfig">Config</button>
+          <button id="btnSettings">Settings</button>
+        </div>
+        <p class="small">
+          This is a starter page. Commands are currently logged locally.
+          Wire these buttons to WebSocket/API next.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>Cards (Preview)</h2>
+        <div id="cards" class="cards"></div>
+      </div>
+    </div>
+
+    <script>
+      const state = {
+        runMode: "RUN_NORMAL",
+        testMode: false,
+        wifiOnline: true,
+        wsOnline: false,
+        snapshotSeq: 1,
+        globalMask: false,
+        cards: [
+          { id: 0, type: "DigitalInput", logicalState: false, physicalState: false },
+          { id: 4, type: "AnalogInput", logicalState: false, physicalState: true },
+          { id: 8, type: "DigitalOutput", logicalState: true, physicalState: true }
+        ]
+      };
+
+      function render() {
+        document.getElementById("runMode").textContent = state.runMode;
+        document.getElementById("testMode").textContent = state.testMode ? "ON" : "OFF";
+        document.getElementById("wifiState").innerHTML = state.wifiOnline
+          ? '<span class="status-ok">Online</span>'
+          : '<span class="status-bad">Offline</span>';
+        document.getElementById("wsState").innerHTML = state.wsOnline
+          ? '<span class="status-ok">Connected</span>'
+          : '<span class="status-warn">Polling</span>';
+        document.getElementById("snapshotSeq").textContent = String(state.snapshotSeq);
+
+        const cards = document.getElementById("cards");
+        cards.innerHTML = "";
+        state.cards.forEach((c) => {
+          const el = document.createElement("div");
+          el.className = "card";
+          el.innerHTML = `
+            <div><strong>#${c.id}</strong> ${c.type}</div>
+            <div class="small">Logical: ${c.logicalState}</div>
+            <div class="small">Physical: ${c.physicalState}</div>
+          `;
+          cards.appendChild(el);
+        });
+      }
+
+      async function fetchSnapshot() {
+        try {
+          const res = await fetch("/api/snapshot");
+          if (!res.ok) return;
+          const snap = await res.json();
+          state.runMode = snap.runMode || state.runMode;
+          state.testMode = !!(snap.testMode && snap.testMode.active);
+          state.wifiOnline = true;
+          state.snapshotSeq = snap.snapshotSeq || snap.scanSeq || state.snapshotSeq;
+          state.cards = Array.isArray(snap.cards) ? snap.cards : state.cards;
+        } catch (_err) {
+          state.wifiOnline = false;
+        }
+      }
+
+      let ws = null;
+      let reqCounter = 0;
+      const pending = new Map();
+
+      function applySnapshot(snap) {
+        state.runMode = snap.runMode || state.runMode;
+        state.testMode = !!(snap.testMode && snap.testMode.active);
+        state.snapshotSeq = snap.snapshotSeq || snap.scanSeq || state.snapshotSeq;
+        state.cards = Array.isArray(snap.cards) ? snap.cards : state.cards;
+      }
+
+      function connectWs() {
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        ws = new WebSocket(`${proto}://${location.hostname}:81/`);
+        ws.onopen = () => {
+          state.wsOnline = true;
+          state.wifiOnline = true;
+          render();
+        };
+        ws.onclose = () => {
+          state.wsOnline = false;
+          render();
+          setTimeout(connectWs, 1500);
+        };
+        ws.onerror = () => {
+          state.wsOnline = false;
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === "runtime_snapshot") {
+              applySnapshot(msg);
+              render();
+              return;
+            }
+            if (msg.type === "command_result") {
+              const waiter = pending.get(msg.requestId);
+              if (waiter) {
+                pending.delete(msg.requestId);
+                waiter(!!msg.ok);
+              }
+            }
+          } catch (_err) {}
+        };
+      }
+
+      async function sendCommand(name, payload = {}) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const requestId = `cmd-${++reqCounter}`;
+          const ok = await new Promise((resolve) => {
+            pending.set(requestId, resolve);
+            ws.send(
+              JSON.stringify({
+                type: "command",
+                schemaVersion: 1,
+                requestId,
+                name,
+                payload
+              })
+            );
+            setTimeout(() => {
+              if (pending.has(requestId)) {
+                pending.delete(requestId);
+                resolve(false);
+              }
+            }, 1200);
+          });
+          return ok;
+        }
+
+        try {
+          const res = await fetch("/api/command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name,
+              payload
+            })
+          });
+          return res.ok;
+        } catch (_err) {
+          state.wifiOnline = false;
+          return false;
+        }
+      }
+
+      document.getElementById("btnRefresh").addEventListener("click", () => {
+        fetchSnapshot().then(render);
+      });
+
+      document.getElementById("btnStep").addEventListener("click", () => {
+        sendCommand("step_once").then(() => fetchSnapshot().then(render));
+      });
+
+      document.getElementById("btnTest").addEventListener("click", () => {
+        state.testMode = !state.testMode;
+        sendCommand("set_test_mode", { active: state.testMode }).then(() =>
+          fetchSnapshot().then(render)
+        );
+      });
+
+      document.getElementById("btnMaskAll").addEventListener("click", () => {
+        state.globalMask = !state.globalMask;
+        sendCommand("set_output_mask_global", { masked: state.globalMask }).then(() =>
+          fetchSnapshot().then(render)
+        );
+      });
+
+      document.getElementById("btnSettings").addEventListener("click", () => {
+        window.location.href = "/settings";
+      });
+
+      document.getElementById("btnConfig").addEventListener("click", () => {
+        window.location.href = "/config";
+      });
+
+      connectWs();
+      fetchSnapshot().then(render);
+      setInterval(() => {
+        if (!state.wsOnline) fetchSnapshot().then(render);
+      }, 1000);
+    </script>
+  </body>
+</html>

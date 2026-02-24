@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AdvancedTimer Config Editor</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --line: #334155;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --ok: #10b981;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: radial-gradient(circle at top, #1e293b, var(--bg));
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 14px;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        background: var(--panel);
+        margin-bottom: 12px;
+      }
+      h1, h2, h3 {
+        margin: 0 0 10px;
+        font-weight: 600;
+      }
+      h1 { font-size: 20px; }
+      h2 { font-size: 16px; }
+      h3 { font-size: 14px; color: var(--muted); }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button, select, input {
+        border: 1px solid var(--line);
+        background: #1f2937;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 7px 9px;
+      }
+      button { cursor: pointer; }
+      button:hover { border-color: #64748b; }
+      .layout {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        gap: 12px;
+      }
+      .cards {
+        max-height: 70vh;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+      .card-btn {
+        text-align: left;
+        width: 100%;
+      }
+      .card-btn.active {
+        border-color: #38bdf8;
+        background: #0b2a39;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: 8px;
+      }
+      .field label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .field input, .field select {
+        width: 100%;
+      }
+      .field.invalid input, .field.invalid select {
+        border-color: var(--bad);
+        box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
+      }
+      .status {
+        min-height: 20px;
+        font-size: 13px;
+      }
+      .ok { color: var(--ok); }
+      .warn { color: var(--warn); }
+      .bad { color: var(--bad); }
+      .mono {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <h1>Configuration Editor</h1>
+        <div class="row">
+          <button id="btnBack">Back To Home</button>
+          <button id="btnLoadActive">Load Active</button>
+          <button id="btnSaveStaged">Save Staged</button>
+          <button id="btnValidate">Validate</button>
+          <button id="btnCommit">Commit/Deploy</button>
+          <select id="restoreSource">
+            <option value="LKG">Restore LKG</option>
+            <option value="SLOT1">Restore SLOT1</option>
+            <option value="SLOT2">Restore SLOT2</option>
+            <option value="SLOT3">Restore SLOT3</option>
+            <option value="FACTORY">Restore FACTORY</option>
+          </select>
+          <button id="btnRestore">Restore</button>
+        </div>
+        <div id="status" class="status"></div>
+      </div>
+
+      <div class="layout">
+        <div class="panel">
+          <h2>Cards</h2>
+          <div id="cardList" class="cards"></div>
+        </div>
+
+        <div class="panel">
+          <h2 id="editorTitle">Card Editor</h2>
+          <h3>Core</h3>
+          <div class="grid">
+            <div class="field"><label>ID</label><input id="id" disabled /></div>
+            <div class="field"><label>Type</label><input id="type" disabled /></div>
+            <div class="field"><label>Index</label><input id="index" disabled /></div>
+            <div class="field"><label>HW Pin</label><input id="hwPin" type="number" /></div>
+            <div class="field"><label>Invert</label><select id="invert"><option value="false">false</option><option value="true">true</option></select></div>
+            <div class="field"><label>Mode</label><select id="mode"></select></div>
+          </div>
+          <h3>Timing / Params</h3>
+          <div class="grid">
+            <div class="field"><label>setting1</label><input id="setting1" type="number" /></div>
+            <div class="field"><label>setting2</label><input id="setting2" type="number" /></div>
+            <div class="field"><label>setting3</label><input id="setting3" type="number" /></div>
+          </div>
+          <h3>SET Group</h3>
+          <div class="grid">
+            <div class="field"><label>setA_ID</label><select id="setA_ID"></select></div>
+            <div class="field"><label>setA_Operator</label><select id="setA_Operator"></select></div>
+            <div class="field"><label>setA_Threshold</label><input id="setA_Threshold" type="number" /></div>
+            <div class="field"><label>setB_ID</label><select id="setB_ID"></select></div>
+            <div class="field"><label>setB_Operator</label><select id="setB_Operator"></select></div>
+            <div class="field"><label>setB_Threshold</label><input id="setB_Threshold" type="number" /></div>
+            <div class="field"><label>setCombine</label><select id="setCombine"></select></div>
+          </div>
+          <h3>RESET Group</h3>
+          <div class="grid">
+            <div class="field"><label>resetA_ID</label><select id="resetA_ID"></select></div>
+            <div class="field"><label>resetA_Operator</label><select id="resetA_Operator"></select></div>
+            <div class="field"><label>resetA_Threshold</label><input id="resetA_Threshold" type="number" /></div>
+            <div class="field"><label>resetB_ID</label><select id="resetB_ID"></select></div>
+            <div class="field"><label>resetB_Operator</label><select id="resetB_Operator"></select></div>
+            <div class="field"><label>resetB_Threshold</label><input id="resetB_Threshold" type="number" /></div>
+            <div class="field"><label>resetCombine</label><select id="resetCombine"></select></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <button id="btnApplyCard">Apply Card Changes</button>
+          </div>
+          <div id="validationView" class="mono"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const modeByType = {
+        DigitalInput: ["Mode_DI_Rising", "Mode_DI_Falling", "Mode_DI_Change"],
+        AnalogInput: ["Mode_AI_Continuous"],
+        DigitalOutput: ["Mode_DO_Normal", "Mode_DO_Immediate", "Mode_DO_Gated"],
+        SoftIO: ["Mode_DO_Normal", "Mode_DO_Immediate", "Mode_DO_Gated"]
+      };
+      const operators = [
+        "Op_AlwaysTrue", "Op_AlwaysFalse", "Op_LogicalTrue", "Op_LogicalFalse",
+        "Op_PhysicalOn", "Op_PhysicalOff", "Op_Triggered", "Op_TriggerCleared",
+        "Op_GT", "Op_LT", "Op_EQ", "Op_NEQ", "Op_GTE", "Op_LTE",
+        "Op_Running", "Op_Finished", "Op_Stopped"
+      ];
+      const opAlways = ["Op_AlwaysTrue", "Op_AlwaysFalse"];
+      const opNumeric = ["Op_GT", "Op_LT", "Op_EQ", "Op_NEQ", "Op_GTE", "Op_LTE"];
+      const opState = ["Op_LogicalTrue", "Op_LogicalFalse", "Op_PhysicalOn", "Op_PhysicalOff"];
+      const opTrigger = ["Op_Triggered", "Op_TriggerCleared"];
+      const opProcess = ["Op_Running", "Op_Finished", "Op_Stopped"];
+      const combines = ["Combine_None", "Combine_AND", "Combine_OR"];
+
+      const state = { activeVersion: "", cards: [], selectedId: -1 };
+      state.validationOk = false;
+      state.lastValidation = null;
+      state.fieldErrors = {};
+
+      function setStatus(text, cls = "ok") {
+        const el = document.getElementById("status");
+        el.textContent = text;
+        el.className = `status ${cls}`;
+      }
+
+      function setCommitEnabled(enabled) {
+        const btn = document.getElementById("btnCommit");
+        btn.disabled = !enabled;
+        btn.style.opacity = enabled ? "1" : "0.55";
+        btn.title = enabled ? "" : "Run Validate successfully before Commit";
+      }
+
+      function fillSelect(id, values) {
+        const sel = document.getElementById(id);
+        sel.innerHTML = "";
+        values.forEach((v) => {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = v;
+          sel.appendChild(opt);
+        });
+      }
+
+      function cardFriendlyName(card) {
+        if (card.type === "DigitalInput") return `DI${card.index}`;
+        if (card.type === "AnalogInput") return `AI${card.index}`;
+        if (card.type === "DigitalOutput") return `DO${card.index}`;
+        if (card.type === "SoftIO") return `Soft IO${card.index}`;
+        return `Card ${card.id}`;
+      }
+
+      function fillRefSelect(id, selectedId) {
+        const sel = document.getElementById(id);
+        sel.innerHTML = "";
+        state.cards.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = String(c.id);
+          opt.textContent = `${cardFriendlyName(c)} (#${c.id})`;
+          sel.appendChild(opt);
+        });
+        sel.value = String(selectedId ?? 0);
+      }
+
+      function initSelects() {
+        fillSelect("mode", []);
+        fillSelect("setA_Operator", operators);
+        fillSelect("setB_Operator", operators);
+        fillSelect("resetA_Operator", operators);
+        fillSelect("resetB_Operator", operators);
+        fillSelect("setCombine", combines);
+        fillSelect("resetCombine", combines);
+      }
+
+      function allowedOperatorsForTargetType(type) {
+        if (type === "AnalogInput") return [...opAlways, ...opNumeric];
+        if (type === "DigitalInput") return [...opAlways, ...opState, ...opTrigger, ...opNumeric];
+        if (type === "DigitalOutput" || type === "SoftIO") {
+          return [...opAlways, ...opState, ...opTrigger, ...opNumeric, ...opProcess];
+        }
+        return [...opAlways];
+      }
+
+      function ensureSelectValue(id, allowed, currentValue) {
+        fillSelect(id, allowed);
+        const sel = document.getElementById(id);
+        if (allowed.includes(currentValue)) sel.value = currentValue;
+        else sel.value = allowed[0] || "";
+      }
+
+      function refreshModeOptions(card) {
+        const allowedModes = modeByType[card.type] || [];
+        ensureSelectValue("mode", allowedModes, card.mode);
+      }
+
+      function refreshOperatorOptions(card) {
+        const getTypeByRef = (refId) => {
+          const target = byId(Number(refId));
+          return target ? target.type : null;
+        };
+        const typeSetA = getTypeByRef(card.setA_ID);
+        const typeSetB = getTypeByRef(card.setB_ID);
+        const typeResetA = getTypeByRef(card.resetA_ID);
+        const typeResetB = getTypeByRef(card.resetB_ID);
+        ensureSelectValue("setA_Operator", allowedOperatorsForTargetType(typeSetA), card.setA_Operator);
+        ensureSelectValue("setB_Operator", allowedOperatorsForTargetType(typeSetB), card.setB_Operator);
+        ensureSelectValue("resetA_Operator", allowedOperatorsForTargetType(typeResetA), card.resetA_Operator);
+        ensureSelectValue("resetB_Operator", allowedOperatorsForTargetType(typeResetB), card.resetB_Operator);
+      }
+
+      function refreshReferenceIdOptions(card) {
+        fillRefSelect("setA_ID", card.setA_ID);
+        fillRefSelect("setB_ID", card.setB_ID);
+        fillRefSelect("resetA_ID", card.resetA_ID);
+        fillRefSelect("resetB_ID", card.resetB_ID);
+      }
+
+      function byId(id) {
+        return state.cards.find((c) => c.id === id);
+      }
+
+      function renderCardList() {
+        const list = document.getElementById("cardList");
+        list.innerHTML = "";
+        state.cards.forEach((c) => {
+          const btn = document.createElement("button");
+          btn.className = `card-btn ${state.selectedId === c.id ? "active" : ""}`;
+          btn.textContent = `#${c.id} ${c.type} [${c.index}]`;
+          btn.onclick = () => { state.selectedId = c.id; renderAll(); };
+          list.appendChild(btn);
+        });
+      }
+
+      function setInputValue(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = value ?? "";
+      }
+
+      function renderEditor() {
+        const c = byId(state.selectedId);
+        if (!c) return;
+        document.getElementById("editorTitle").textContent = `Card #${c.id} Editor`;
+        [
+          "id", "type", "index", "hwPin", "setting1", "setting2", "setting3",
+          "setA_ID", "setA_Operator", "setA_Threshold",
+          "setB_ID", "setB_Operator", "setB_Threshold", "setCombine",
+          "resetA_ID", "resetA_Operator", "resetA_Threshold",
+          "resetB_ID", "resetB_Operator", "resetB_Threshold", "resetCombine",
+          "mode"
+        ].forEach((k) => setInputValue(k, c[k]));
+        setInputValue("invert", c.invert ? "true" : "false");
+        refreshReferenceIdOptions(c);
+        refreshModeOptions(c);
+        refreshOperatorOptions(c);
+
+        // Field error highlighting (selected card only).
+        document.querySelectorAll(".field").forEach((f) => f.classList.remove("invalid"));
+        Object.keys(state.fieldErrors).forEach((id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const parent = el.closest(".field");
+          if (parent) parent.classList.add("invalid");
+        });
+      }
+
+      function readEditorIntoSelectedCard() {
+        const c = byId(state.selectedId);
+        if (!c) return;
+        const n = (id) => Number(document.getElementById(id).value || 0);
+        const s = (id) => document.getElementById(id).value;
+        c.hwPin = n("hwPin");
+        c.invert = s("invert") === "true";
+        c.mode = s("mode");
+        c.setting1 = n("setting1");
+        c.setting2 = n("setting2");
+        c.setting3 = n("setting3");
+        c.setA_ID = n("setA_ID");
+        c.setA_Operator = s("setA_Operator");
+        c.setA_Threshold = n("setA_Threshold");
+        c.setB_ID = n("setB_ID");
+        c.setB_Operator = s("setB_Operator");
+        c.setB_Threshold = n("setB_Threshold");
+        c.setCombine = s("setCombine");
+        c.resetA_ID = n("resetA_ID");
+        c.resetA_Operator = s("resetA_Operator");
+        c.resetA_Threshold = n("resetA_Threshold");
+        c.resetB_ID = n("resetB_ID");
+        c.resetB_Operator = s("resetB_Operator");
+        c.resetB_Threshold = n("resetB_Threshold");
+        c.resetCombine = s("resetCombine");
+      }
+
+      async function getJson(url) {
+        const res = await fetch(url);
+        const data = await res.json();
+        return { ok: res.ok, data };
+      }
+
+      async function postJson(url, payload, allowEmpty = false) {
+        const opt = { method: "POST", headers: { "Content-Type": "application/json" } };
+        if (!allowEmpty) opt.body = JSON.stringify(payload || {});
+        else if (payload) opt.body = JSON.stringify(payload);
+        const res = await fetch(url, opt);
+        let data = {};
+        try { data = await res.json(); } catch (_e) {}
+        return { ok: res.ok, data };
+      }
+
+      async function loadActive() {
+        const { ok, data } = await getJson("/api/config/active");
+        if (!ok || !data.ok) {
+          setStatus("Failed to load active config", "bad");
+          return;
+        }
+        state.activeVersion = data.activeVersion || "";
+        state.cards = Array.isArray(data.config?.cards) ? data.config.cards : [];
+        if (state.cards.length && state.selectedId < 0) state.selectedId = state.cards[0].id;
+        if (!byId(state.selectedId) && state.cards.length) state.selectedId = state.cards[0].id;
+        state.validationOk = false;
+        state.lastValidation = null;
+        state.fieldErrors = {};
+        setCommitEnabled(false);
+        renderAll();
+        setStatus(`Active config loaded (${state.activeVersion})`, "ok");
+      }
+
+      async function saveStaged() {
+        readEditorIntoSelectedCard();
+        const payload = { schemaVersion: 1, config: { cards: state.cards } };
+        const { ok, data } = await postJson("/api/config/staged/save", payload);
+        if (!ok || !data.ok) {
+          setStatus(`Staged save failed`, "bad");
+          return;
+        }
+        state.validationOk = false;
+        state.fieldErrors = {};
+        setCommitEnabled(false);
+        setStatus("Staged config saved", "ok");
+      }
+
+      function validateLocally() {
+        const errors = {};
+        const ids = new Set();
+        const maxId = state.cards.length - 1;
+        const selected = byId(state.selectedId);
+        if (!selected) return { ok: true, errors };
+
+        state.cards.forEach((c) => {
+          if (ids.has(c.id)) errors.id = "Duplicate ID";
+          ids.add(c.id);
+        });
+
+        const checkRef = (v, field) => {
+          if (!Number.isInteger(v) || v < 0 || v > maxId) errors[field] = "Out of range";
+        };
+        ["setting1", "setting2", "setting3", "hwPin", "setA_Threshold",
+         "setB_Threshold", "resetA_Threshold", "resetB_Threshold"].forEach((field) => {
+          const v = Number(selected[field]);
+          if (!Number.isFinite(v) || v < 0) errors[field] = "Invalid";
+        });
+        checkRef(Number(selected.setA_ID), "setA_ID");
+        checkRef(Number(selected.setB_ID), "setB_ID");
+        checkRef(Number(selected.resetA_ID), "resetA_ID");
+        checkRef(Number(selected.resetB_ID), "resetB_ID");
+        return { ok: Object.keys(errors).length === 0, errors };
+      }
+
+      async function validateStaged() {
+        readEditorIntoSelectedCard();
+        const local = validateLocally();
+        state.fieldErrors = local.errors;
+        renderEditor();
+        if (!local.ok) {
+          state.validationOk = false;
+          setCommitEnabled(false);
+          setStatus("Local validation failed. Fix highlighted fields.", "bad");
+          document.getElementById("validationView").textContent = JSON.stringify(local.errors, null, 2);
+          return;
+        }
+
+        const { ok, data } = await postJson("/api/config/staged/validate", null, true);
+        if (!ok || !data.ok) {
+          const msg = data?.error?.message || "Validation failed";
+          state.validationOk = false;
+          setCommitEnabled(false);
+          setStatus(msg, "bad");
+          document.getElementById("validationView").textContent = JSON.stringify(data, null, 2);
+          return;
+        }
+        state.validationOk = true;
+        state.lastValidation = data.validation || {};
+        state.fieldErrors = {};
+        setCommitEnabled(true);
+        document.getElementById("validationView").textContent = JSON.stringify(data.validation || {}, null, 2);
+        setStatus("Validation passed", "ok");
+      }
+
+      async function commitStaged() {
+        if (!state.validationOk) {
+          setStatus("Run Validate successfully before Commit", "warn");
+          return;
+        }
+        const { ok, data } = await postJson("/api/config/commit", null, true);
+        if (!ok || !data.ok) {
+          const msg = data?.error?.message || "Commit failed";
+          setStatus(msg, "bad");
+          return;
+        }
+        state.validationOk = false;
+        setCommitEnabled(false);
+        setStatus(`Commit successful (${data.activeVersion || ""})`, "ok");
+        await loadActive();
+      }
+
+      async function restoreConfig() {
+        const source = document.getElementById("restoreSource").value;
+        const { ok, data } = await postJson("/api/config/restore", { schemaVersion: 1, source });
+        if (!ok || !data.ok) {
+          const msg = data?.error?.message || "Restore failed";
+          setStatus(msg, "bad");
+          return;
+        }
+        setStatus(`Restored from ${source}`, "ok");
+        await loadActive();
+      }
+
+      function renderAll() {
+        renderCardList();
+        renderEditor();
+      }
+
+      document.getElementById("btnBack").onclick = () => { window.location.href = "/"; };
+      document.getElementById("btnLoadActive").onclick = loadActive;
+      document.getElementById("btnSaveStaged").onclick = saveStaged;
+      document.getElementById("btnValidate").onclick = validateStaged;
+      document.getElementById("btnCommit").onclick = commitStaged;
+      document.getElementById("btnRestore").onclick = restoreConfig;
+      document.getElementById("btnApplyCard").onclick = () => {
+        readEditorIntoSelectedCard();
+        state.validationOk = false;
+        state.fieldErrors = {};
+        setCommitEnabled(false);
+        setStatus(`Applied local edits to card #${state.selectedId} (not saved yet)`, "warn");
+      };
+
+      ["setA_ID", "setB_ID", "resetA_ID", "resetB_ID"].forEach((id) => {
+        document.getElementById(id).addEventListener("change", () => {
+          const c = byId(state.selectedId);
+          if (!c) return;
+          readEditorIntoSelectedCard();
+          refreshOperatorOptions(c);
+        });
+      });
+
+      initSelects();
+      setCommitEnabled(false);
+      loadActive();
+    </script>
+  </body>
+</html>
