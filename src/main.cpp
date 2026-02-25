@@ -17,6 +17,7 @@
 #include <WebSocketsServer.h>
 #include <WiFi.h>
 
+#include <cctype>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -47,7 +48,10 @@ const char* kSlot1ConfigPath = "/config_slot1.json";
 const char* kSlot2ConfigPath = "/config_slot2.json";
 const char* kSlot3ConfigPath = "/config_slot3.json";
 const char* kFactoryConfigPath = "/config_factory.json";
-const uint32_t SCAN_INTERVAL_MS = 500;
+const char* kPortalSettingsPath = "/portal_settings.json";
+const uint32_t kDefaultScanIntervalMs = 500;
+const uint32_t kMinScanIntervalMs = 10;
+const uint32_t kMaxScanIntervalMs = 1000;
 const char* kMasterSsid = "advancedtimer";
 const char* kMasterPassword = "12345678";
 const char* kDefaultUserSsid = "FactoryNext";
@@ -138,8 +142,24 @@ enum inputSourceMode {
   case name:                      \
     return #name;
 
+bool enumTokenEquals(const char* s, const char* token) {
+  if (s == nullptr || token == nullptr) return false;
+  // Keep only enum token characters to tolerate hidden bytes (BOM/ZWSP/etc.).
+  char cleaned[64];
+  size_t j = 0;
+  for (size_t i = 0; s[i] != '\0' && j < (sizeof(cleaned) - 1); ++i) {
+    const unsigned char ch = static_cast<unsigned char>(s[i]);
+    if (std::isalnum(ch) || ch == '_') {
+      cleaned[j++] = static_cast<char>(ch);
+    }
+  }
+  cleaned[j] = '\0';
+
+  return strcmp(cleaned, token) == 0;
+}
+
 #define ENUM_TRY_PARSE_IF(name) \
-  if (strcmp(s, #name) == 0) {  \
+  if (enumTokenEquals(s, #name)) {  \
     out = name;                 \
     return true;                \
   }
@@ -276,18 +296,18 @@ struct LogicCard {
   bool invert;
 
   // DI: debounce duration for DI
-  // DO/SIO: on-delay duration (wait before activating output)
-  // For DO/SIO 0 means infinite wait to on delay until reset
+  // DO/SIO: delay before output turns ON
+  // For DO/SIO 0 means stay in delay phase until reset
   // AI: input minimum (raw ADC/sensor lower bound)
   uint32_t setting1;
   // DI: reserved for future use
-  // DO/SIO: off-delay duration (turn off output after interval ends)
-  // For DO/SIO 0 means infinite wait to off delay until reset
+  // DO/SIO: ON duration (time to keep output ON before turning OFF)
+  // For DO/SIO 0 means stay ON until reset
   // AI: input maximum (raw ADC/sensor upper bound)
   uint32_t setting2;
   // DI: reserved for future use
   // DO/SIO: repeat count (0 = infinite, 1 = single pulse, N = N full cycles)
-  // AI: EMA alpha in range 0..1000 (represents 0.0..1.0)
+  // AI: EMA alpha in range 0.0..1.0 (stored internally as 0..1000)
   uint32_t setting3;
 
   // DI: qualified logical state after debounce/qualification when setCondition
@@ -312,11 +332,11 @@ struct LogicCard {
   // AI: EMA accumulator and filtered output storage
   uint32_t currentValue;
   // DI: timestamp of last qualified edge for debounce timing
-  // DO/SIO: timestamp when current ON-phase started for timing control
+  // DO/SIO: timestamp when current delay-before-ON phase started
   // AI: output minimum (scaled physical lower bound)
   uint32_t startOnMs;
   // DI: timestamp of last qualified edge for debounce timing
-  // DO/SIO: timestamp when current OFF-phase started for timing control
+  // DO/SIO: timestamp when current ON-duration phase started
   // AI: output maximum (scaled physical upper bound)
   uint32_t startOffMs;
   // DI: unused for now, reserved for future use (e.g. long-press tracking)
@@ -333,6 +353,7 @@ struct LogicCard {
   cardMode mode;
   // DI: filtering lifecycle state (Idle, Filtering, Qualified, Inhibited)
   // DO/SIO: phase state (Idle, OnDelay, Active, Finished)
+  // OnDelay = delay-before-ON, Active = output ON duration
   // AI: placeholder state tag (State_AI_Streaming), no phase machine
   cardState state;
 
@@ -366,6 +387,7 @@ bool gPrevDIPrimed[TOTAL_CARDS] = {};
 struct SharedRuntimeSnapshot {
   uint32_t seq;
   uint32_t tsMs;
+  uint32_t lastCompleteScanUs;
   runMode mode;
   bool testModeActive;
   bool globalOutputMask;
@@ -375,6 +397,7 @@ struct SharedRuntimeSnapshot {
   inputSourceMode inputSource[TOTAL_CARDS];
   uint32_t forcedAIValue[TOTAL_CARDS];
   bool outputMaskLocal[TOTAL_CARDS];
+  bool breakpointEnabled[TOTAL_CARDS];
 };
 
 QueueHandle_t gKernelCommandQueue = nullptr;
@@ -409,6 +432,8 @@ bool gCardBreakpoint[TOTAL_CARDS] = {};
 bool gCardOutputMask[TOTAL_CARDS] = {};
 inputSourceMode gCardInputSource[TOTAL_CARDS] = {};
 uint32_t gCardForcedAIValue[TOTAL_CARDS] = {};
+uint32_t gScanIntervalMs = kDefaultScanIntervalMs;
+uint32_t gLastCompleteScanUs = 0;
 
 const uint32_t SLOW_SCAN_INTERVAL_MS = 250;
 
@@ -426,6 +451,7 @@ void handleHttpSettingsPage();
 void handleHttpConfigPage();
 void handleHttpGetSettings();
 void handleHttpSaveSettingsWiFi();
+void handleHttpSaveSettingsRuntime();
 void handleHttpReconnectWiFi();
 void handleHttpReboot();
 void handleHttpGetActiveConfig();
@@ -451,6 +477,8 @@ bool extractConfigCardsFromRequest(JsonObjectConst root, JsonArrayConst& outCard
                                    String& reason);
 void writeConfigErrorResponse(int statusCode, const char* code,
                               const String& message);
+bool loadPortalSettingsFromLittleFS();
+bool savePortalSettingsToLittleFS();
 
 enum kernelCommandType {
   KernelCmd_SetRunMode,
@@ -480,7 +508,11 @@ void serializeCardToJson(const LogicCard& card, JsonObject& json) {
 
   json["setting1"] = card.setting1;
   json["setting2"] = card.setting2;
-  json["setting3"] = card.setting3;
+  if (card.type == AnalogInput) {
+    json["setting3"] = static_cast<double>(card.setting3) / 1000.0;
+  } else {
+    json["setting3"] = card.setting3;
+  }
 
   json["logicalState"] = card.logicalState;
   json["physicalState"] = card.physicalState;
@@ -510,16 +542,38 @@ void serializeCardToJson(const LogicCard& card, JsonObject& json) {
   json["resetCombine"] = toString(card.resetCombine);
 }
 
-void deserializeCardFromJson(JsonObjectConst json, LogicCard& card) {
+void deserializeCardFromJson(JsonVariantConst jsonVariant, LogicCard& card) {
+  if (!jsonVariant.is<JsonObjectConst>()) return;
+  JsonObjectConst json = jsonVariant.as<JsonObjectConst>();
+  LogicCard before = card;
+
   card.id = json["id"] | card.id;
-  card.type = parseOrDefault(json["type"] | nullptr, DigitalInput);
+  const char* rawType = json["type"].as<const char*>();
+  logicCardType parsedType = before.type;
+  bool typeOk = tryParseLogicCardType(rawType, parsedType);
+  card.type = typeOk ? parsedType : before.type;
   card.index = json["index"] | card.index;
   card.hwPin = json["hwPin"] | card.hwPin;
   card.invert = json["invert"] | card.invert;
 
   card.setting1 = json["setting1"] | card.setting1;
   card.setting2 = json["setting2"] | card.setting2;
-  card.setting3 = json["setting3"] | card.setting3;
+  if (card.type == AnalogInput) {
+    const double currentAlpha = static_cast<double>(card.setting3) / 1000.0;
+    const double parsed = json["setting3"] | currentAlpha;
+    if (parsed >= 0.0 && parsed <= 1.0) {
+      const double scaled = parsed * 1000.0;
+      card.setting3 = static_cast<uint32_t>(scaled + 0.5);
+    } else {
+      // Backward compatibility: accept legacy milliunit payloads.
+      int32_t legacy = static_cast<int32_t>(parsed);
+      if (legacy < 0) legacy = 0;
+      if (legacy > 1000) legacy = 1000;
+      card.setting3 = static_cast<uint32_t>(legacy);
+    }
+  } else {
+    card.setting3 = json["setting3"] | card.setting3;
+  }
 
   card.logicalState = json["logicalState"] | card.logicalState;
   card.physicalState = json["physicalState"] | card.physicalState;
@@ -529,29 +583,51 @@ void deserializeCardFromJson(JsonObjectConst json, LogicCard& card) {
   card.startOffMs = json["startOffMs"] | card.startOffMs;
   card.repeatCounter = json["repeatCounter"] | card.repeatCounter;
 
-  card.mode = parseOrDefault(json["mode"] | nullptr, Mode_None);
-  card.state = parseOrDefault(json["state"] | nullptr, State_None);
+  const char* rawMode = json["mode"].as<const char*>();
+  cardMode parsedMode = before.mode;
+  bool modeOk = tryParseCardMode(rawMode, parsedMode);
+  card.mode = modeOk ? parsedMode : before.mode;
+
+  const char* rawState = json["state"].as<const char*>();
+  cardState parsedState = before.state;
+  bool stateOk = tryParseCardState(rawState, parsedState);
+  card.state = stateOk ? parsedState : before.state;
 
   card.setA_ID = json["setA_ID"] | card.setA_ID;
-  card.setA_Operator =
-      parseOrDefault(json["setA_Operator"] | nullptr, Op_AlwaysFalse);
+  const char* rawSetA = json["setA_Operator"].as<const char*>();
+  logicOperator parsedSetA = before.setA_Operator;
+  bool setAOk = tryParseLogicOperator(rawSetA, parsedSetA);
+  card.setA_Operator = setAOk ? parsedSetA : before.setA_Operator;
   card.setA_Threshold = json["setA_Threshold"] | card.setA_Threshold;
   card.setB_ID = json["setB_ID"] | card.setB_ID;
-  card.setB_Operator =
-      parseOrDefault(json["setB_Operator"] | nullptr, Op_AlwaysFalse);
+  const char* rawSetB = json["setB_Operator"].as<const char*>();
+  logicOperator parsedSetB = before.setB_Operator;
+  bool setBOk = tryParseLogicOperator(rawSetB, parsedSetB);
+  card.setB_Operator = setBOk ? parsedSetB : before.setB_Operator;
   card.setB_Threshold = json["setB_Threshold"] | card.setB_Threshold;
-  card.setCombine = parseOrDefault(json["setCombine"] | nullptr, Combine_None);
+  const char* rawSetCombine = json["setCombine"].as<const char*>();
+  combineMode parsedSetCombine = before.setCombine;
+  bool setCombineOk = tryParseCombineMode(rawSetCombine, parsedSetCombine);
+  card.setCombine = setCombineOk ? parsedSetCombine : before.setCombine;
 
   card.resetA_ID = json["resetA_ID"] | card.resetA_ID;
-  card.resetA_Operator =
-      parseOrDefault(json["resetA_Operator"] | nullptr, Op_AlwaysFalse);
+  const char* rawResetA = json["resetA_Operator"].as<const char*>();
+  logicOperator parsedResetA = before.resetA_Operator;
+  bool resetAOk = tryParseLogicOperator(rawResetA, parsedResetA);
+  card.resetA_Operator = resetAOk ? parsedResetA : before.resetA_Operator;
   card.resetA_Threshold = json["resetA_Threshold"] | card.resetA_Threshold;
   card.resetB_ID = json["resetB_ID"] | card.resetB_ID;
-  card.resetB_Operator =
-      parseOrDefault(json["resetB_Operator"] | nullptr, Op_AlwaysFalse);
+  const char* rawResetB = json["resetB_Operator"].as<const char*>();
+  logicOperator parsedResetB = before.resetB_Operator;
+  bool resetBOk = tryParseLogicOperator(rawResetB, parsedResetB);
+  card.resetB_Operator = resetBOk ? parsedResetB : before.resetB_Operator;
   card.resetB_Threshold = json["resetB_Threshold"] | card.resetB_Threshold;
-  card.resetCombine =
-      parseOrDefault(json["resetCombine"] | nullptr, Combine_None);
+  const char* rawResetCombine = json["resetCombine"].as<const char*>();
+  combineMode parsedResetCombine = before.resetCombine;
+  bool resetCombineOk =
+      tryParseCombineMode(rawResetCombine, parsedResetCombine);
+  card.resetCombine = resetCombineOk ? parsedResetCombine : before.resetCombine;
+
 }
 
 void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
@@ -601,8 +677,8 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
     card.index = globalId - DO_START;
     card.hwPin = DO_Pins[card.index];
     // DO defaults: safe one-shot profile, but disabled by condition defaults.
-    card.setting1 = 1000;  // on-delay / active window
-    card.setting2 = 1000;  // off-delay
+    card.setting1 = 1000;  // delay before ON
+    card.setting2 = 1000;  // ON duration
     card.setting3 = 1;     // one cycle
     card.mode = Mode_DO_Normal;
     card.state = State_DO_Idle;
@@ -616,7 +692,7 @@ void initializeCardSafeDefaults(LogicCard& card, uint8_t globalId) {
     // AI defaults: raw ADC range with moderate smoothing and 0..100.00 output.
     card.setting1 = 0;      // input minimum
     card.setting2 = 4095;   // input maximum
-    card.setting3 = 250;    // EMA alpha = 0.25
+    card.setting3 = 250;    // EMA alpha = 0.25 (stored as 250/1000)
     card.startOnMs = 0;     // output minimum (centiunits)
     card.startOffMs = 10000;  // output maximum (centiunits)
     card.mode = Mode_AI_Continuous;
@@ -668,11 +744,13 @@ bool loadLogicCardsFromLittleFS() {
 
   JsonArrayConst array = doc.as<JsonArrayConst>();
   if (array.size() != TOTAL_CARDS) return false;
+  String reason;
+  if (!validateConfigCardsArray(array, reason)) return false;
 
   for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
     JsonVariantConst item = array[i];
     if (!item.is<JsonObjectConst>()) return false;
-    deserializeCardFromJson(item.as<JsonObjectConst>(), logicCards[i]);
+    deserializeCardFromJson(item, logicCards[i]);
   }
   return true;
 }
@@ -720,8 +798,8 @@ void appendRuntimeSnapshotCard(JsonArray& cards,
   forced["forcedAIValue"] = snapshot.forcedAIValue[cardId];
   forced["outputMaskLocal"] = snapshot.outputMaskLocal[cardId];
   forced["outputMasked"] =
-      snapshot.testModeActive &&
       (snapshot.globalOutputMask || snapshot.outputMaskLocal[cardId]);
+  node["breakpointEnabled"] = snapshot.breakpointEnabled[cardId];
 }
 
 void serializeRuntimeSnapshot(JsonDocument& doc, uint32_t nowMs) {
@@ -731,7 +809,9 @@ void serializeRuntimeSnapshot(JsonDocument& doc, uint32_t nowMs) {
   doc["type"] = "runtime_snapshot";
   doc["schemaVersion"] = 1;
   doc["tsMs"] = (snapshot.tsMs == 0) ? nowMs : snapshot.tsMs;
-  doc["scanIntervalMs"] = SCAN_INTERVAL_MS;
+  doc["scanIntervalMs"] = gScanIntervalMs;
+  doc["lastCompleteScanMs"] =
+      static_cast<double>(snapshot.lastCompleteScanUs) / 1000.0;
   doc["runMode"] = toString(snapshot.mode);
   doc["snapshotSeq"] = snapshot.seq;
 
@@ -826,6 +906,9 @@ void handleHttpGetSettings() {
   doc["masterEditable"] = false;
   doc["userSsid"] = gUserSsid;
   doc["userPassword"] = gUserPassword;
+  doc["scanIntervalMs"] = gScanIntervalMs;
+  doc["scanIntervalMinMs"] = kMinScanIntervalMs;
+  doc["scanIntervalMaxMs"] = kMaxScanIntervalMs;
   doc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
   doc["wifiIp"] = WiFi.localIP().toString();
   doc["firmwareVersion"] = String(__DATE__) + " " + String(__TIME__);
@@ -858,6 +941,28 @@ void handleHttpSaveSettingsWiFi() {
   strncpy(gUserPassword, password, sizeof(gUserPassword) - 1);
   gUserPassword[sizeof(gUserPassword) - 1] = '\0';
 
+  savePortalSettingsToLittleFS();
+  gPortalServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleHttpSaveSettingsRuntime() {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, gPortalServer.arg("plain"));
+  if (error || !doc.is<JsonObject>()) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"INVALID_REQUEST\"}");
+    return;
+  }
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  const uint32_t requested = root["scanIntervalMs"] | 0;
+  if (requested < kMinScanIntervalMs || requested > kMaxScanIntervalMs) {
+    gPortalServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"VALIDATION_FAILED\"}");
+    return;
+  }
+
+  gScanIntervalMs = requested;
+  savePortalSettingsToLittleFS();
   gPortalServer.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -1029,29 +1134,31 @@ bool commitCards(JsonArrayConst cards, String& reason) {
 }
 
 void handleHttpCommitConfig() {
-  JsonDocument request;
+  JsonDocument sourceDoc;
   JsonArrayConst cards;
   String reason;
+  const bool hasInlinePayload =
+      gPortalServer.hasArg("plain") && gPortalServer.arg("plain").length() > 0;
 
-  if (gPortalServer.hasArg("plain") && gPortalServer.arg("plain").length() > 0) {
+  if (hasInlinePayload) {
     DeserializationError parseError =
-        deserializeJson(request, gPortalServer.arg("plain"));
-    if (parseError || !request.is<JsonObjectConst>()) {
+        deserializeJson(sourceDoc, gPortalServer.arg("plain"));
+    if (parseError || !sourceDoc.is<JsonObjectConst>()) {
       writeConfigErrorResponse(400, "INVALID_REQUEST", "invalid json");
       return;
     }
-    if (!extractConfigCardsFromRequest(request.as<JsonObjectConst>(), cards,
+    if (!extractConfigCardsFromRequest(sourceDoc.as<JsonObjectConst>(), cards,
                                        reason)) {
       writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
       return;
     }
   } else {
-    JsonDocument staged;
-    if (!readJsonFromPath(kStagedConfigPath, staged) || !staged.is<JsonObjectConst>()) {
+    if (!readJsonFromPath(kStagedConfigPath, sourceDoc) ||
+        !sourceDoc.is<JsonObjectConst>()) {
       writeConfigErrorResponse(404, "NOT_FOUND", "no staged config available");
       return;
     }
-    if (!extractConfigCardsFromRequest(staged.as<JsonObjectConst>(), cards,
+    if (!extractConfigCardsFromRequest(sourceDoc.as<JsonObjectConst>(), cards,
                                        reason)) {
       writeConfigErrorResponse(400, "VALIDATION_FAILED", reason);
       return;
@@ -1143,6 +1250,8 @@ void initPortalServer() {
   gPortalServer.on("/api/config/restore", HTTP_POST, handleHttpRestoreConfig);
   gPortalServer.on("/api/settings", HTTP_GET, handleHttpGetSettings);
   gPortalServer.on("/api/settings/wifi", HTTP_POST, handleHttpSaveSettingsWiFi);
+  gPortalServer.on("/api/settings/runtime", HTTP_POST,
+                   handleHttpSaveSettingsRuntime);
   gPortalServer.on("/api/settings/reconnect", HTTP_POST, handleHttpReconnectWiFi);
   gPortalServer.on("/api/settings/reboot", HTTP_POST, handleHttpReboot);
   gPortalServer.on("/favicon.ico", HTTP_GET,
@@ -1262,7 +1371,7 @@ void bootstrapCardsFromStorage() {
     strncpy(gActiveVersion, "v1", sizeof(gActiveVersion) - 1);
     gActiveVersion[sizeof(gActiveVersion) - 1] = '\0';
     gConfigVersionCounter = 1;
-    printLogicCardsJsonToSerial("Loaded JSON from /config.json:");
+    Serial.println("Loaded config from /config.json");
     return;
   }
 
@@ -1271,7 +1380,7 @@ void bootstrapCardsFromStorage() {
     strncpy(gActiveVersion, "v1", sizeof(gActiveVersion) - 1);
     gActiveVersion[sizeof(gActiveVersion) - 1] = '\0';
     gConfigVersionCounter = 1;
-    printLogicCardsJsonToSerial("Saved default JSON to /config.json:");
+    Serial.println("Saved default config to /config.json");
   } else {
     Serial.println("Failed to save default JSON to /config.json");
   }
@@ -1301,6 +1410,7 @@ void initializeRuntimeControlState() {
   gUserPassword[sizeof(gUserPassword) - 1] = '\0';
 
   gRunMode = RUN_NORMAL;
+  gScanIntervalMs = kDefaultScanIntervalMs;
   gScanCursor = 0;
   gStepRequested = false;
   gBreakpointPaused = false;
@@ -1315,7 +1425,6 @@ void initializeRuntimeControlState() {
 }
 
 bool isOutputMasked(uint8_t cardId) {
-  if (!gTestModeActive) return false;
   if (!isDigitalOutputCard(cardId)) return false;
   return gGlobalOutputMask || gCardOutputMask[cardId];
 }
@@ -1347,7 +1456,7 @@ bool deserializeCardsFromArray(JsonArrayConst array, LogicCard* outCards) {
   for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
     JsonVariantConst item = array[i];
     if (!item.is<JsonObjectConst>()) return false;
-    deserializeCardFromJson(item.as<JsonObjectConst>(), outCards[i]);
+    deserializeCardFromJson(item, outCards[i]);
   }
   return true;
 }
@@ -1416,6 +1525,22 @@ bool validateConfigCardsArray(JsonArrayConst array, String& reason) {
     }
     return false;
   };
+  auto isNonNegativeNumber = [](JsonVariantConst v) -> bool {
+    if (v.is<uint64_t>()) return true;
+    if (v.is<int64_t>()) return v.as<int64_t>() >= 0;
+    if (v.is<double>()) return v.as<double>() >= 0.0;
+    if (v.is<float>()) return v.as<float>() >= 0.0f;
+    return false;
+  };
+  auto ensureNonNegativeField = [&](JsonObjectConst card, const char* fieldName,
+                                    const char* label) -> bool {
+    JsonVariantConst v = card[fieldName];
+    if (!isNonNegativeNumber(v)) {
+      reason = String(label) + " must be non-negative";
+      return false;
+    }
+    return true;
+  };
 
   bool seenId[TOTAL_CARDS] = {};
   logicCardType typeById[TOTAL_CARDS] = {};
@@ -1461,8 +1586,33 @@ bool validateConfigCardsArray(JsonArrayConst array, String& reason) {
 
     const char* mode = card["mode"] | "";
     if (!isModeAllowed(typeById[id], mode)) {
-      reason = "mode not valid for card type";
+      reason = "mode not valid for card type (id=" + String(id) +
+               ", type=" + String(toString(typeById[id])) +
+               ", mode=" + String(mode) + ")";
       return false;
+    }
+
+    if (!ensureNonNegativeField(card, "hwPin", "hwPin")) return false;
+    if (!ensureNonNegativeField(card, "setting1", "setting1")) return false;
+    if (!ensureNonNegativeField(card, "setting2", "setting2")) return false;
+    if (!ensureNonNegativeField(card, "setting3", "setting3")) return false;
+    if (!ensureNonNegativeField(card, "startOnMs", "startOnMs")) return false;
+    if (!ensureNonNegativeField(card, "startOffMs", "startOffMs")) return false;
+    if (!ensureNonNegativeField(card, "setA_Threshold", "setA_Threshold"))
+      return false;
+    if (!ensureNonNegativeField(card, "setB_Threshold", "setB_Threshold"))
+      return false;
+    if (!ensureNonNegativeField(card, "resetA_Threshold", "resetA_Threshold"))
+      return false;
+    if (!ensureNonNegativeField(card, "resetB_Threshold", "resetB_Threshold"))
+      return false;
+
+    if (typeById[id] == AnalogInput) {
+      const double alpha = card["setting3"] | 0.0;
+      if (alpha < 0.0 || alpha > 1.0) {
+        reason = "AI setting3 alpha out of range (0..1)";
+        return false;
+      }
     }
 
     uint8_t setAId = card["setA_ID"] | 255;
@@ -1501,6 +1651,41 @@ bool readJsonFromPath(const char* path, JsonDocument& doc) {
   DeserializationError error = deserializeJson(doc, file);
   file.close();
   return !error;
+}
+
+bool loadPortalSettingsFromLittleFS() {
+  if (!LittleFS.exists(kPortalSettingsPath)) return false;
+  JsonDocument doc;
+  if (!readJsonFromPath(kPortalSettingsPath, doc)) return false;
+  if (!doc.is<JsonObjectConst>()) return false;
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+
+  const char* userSsid = root["userSsid"] | "";
+  const char* userPassword = root["userPassword"] | "";
+  const uint32_t scanIntervalMs =
+      root["scanIntervalMs"] | static_cast<uint32_t>(kDefaultScanIntervalMs);
+
+  if (strlen(userSsid) > 0 && strlen(userSsid) <= 32) {
+    strncpy(gUserSsid, userSsid, sizeof(gUserSsid) - 1);
+    gUserSsid[sizeof(gUserSsid) - 1] = '\0';
+  }
+  if (strlen(userPassword) <= 64) {
+    strncpy(gUserPassword, userPassword, sizeof(gUserPassword) - 1);
+    gUserPassword[sizeof(gUserPassword) - 1] = '\0';
+  }
+  if (scanIntervalMs >= kMinScanIntervalMs &&
+      scanIntervalMs <= kMaxScanIntervalMs) {
+    gScanIntervalMs = scanIntervalMs;
+  }
+  return true;
+}
+
+bool savePortalSettingsToLittleFS() {
+  JsonDocument doc;
+  doc["userSsid"] = gUserSsid;
+  doc["userPassword"] = gUserPassword;
+  doc["scanIntervalMs"] = gScanIntervalMs;
+  return writeJsonToPath(kPortalSettingsPath, doc);
 }
 
 bool saveCardsToPath(const char* path, const LogicCard* sourceCards) {
@@ -1707,6 +1892,7 @@ void updateSharedRuntimeSnapshot(uint32_t nowMs, bool incrementSeq) {
   portENTER_CRITICAL(&gSnapshotMux);
   if (incrementSeq) gSharedSnapshot.seq += 1;
   gSharedSnapshot.tsMs = nowMs;
+  gSharedSnapshot.lastCompleteScanUs = gLastCompleteScanUs;
   gSharedSnapshot.mode = gRunMode;
   gSharedSnapshot.testModeActive = gTestModeActive;
   gSharedSnapshot.globalOutputMask = gGlobalOutputMask;
@@ -1718,6 +1904,8 @@ void updateSharedRuntimeSnapshot(uint32_t nowMs, bool incrementSeq) {
          sizeof(gCardForcedAIValue));
   memcpy(gSharedSnapshot.outputMaskLocal, gCardOutputMask,
          sizeof(gCardOutputMask));
+  memcpy(gSharedSnapshot.breakpointEnabled, gCardBreakpoint,
+         sizeof(gCardBreakpoint));
   portEXIT_CRITICAL(&gSnapshotMux);
 }
 
@@ -1804,7 +1992,7 @@ void resetDIRuntime(LogicCard& card) {
 void processDICard(LogicCard& card, uint32_t nowMs) {
   bool sample = false;
   inputSourceMode sourceMode = InputSource_Real;
-  if (card.id < TOTAL_CARDS && gTestModeActive) {
+  if (card.id < TOTAL_CARDS) {
     sourceMode = gCardInputSource[card.id];
   }
 
@@ -1894,7 +2082,7 @@ uint32_t clampUInt32(uint32_t value, uint32_t lo, uint32_t hi) {
 void processAICard(LogicCard& card) {
   uint32_t raw = 0;
   inputSourceMode sourceMode = InputSource_Real;
-  if (card.id < TOTAL_CARDS && gTestModeActive) {
+  if (card.id < TOTAL_CARDS) {
     sourceMode = gCardInputSource[card.id];
   }
 
@@ -1932,13 +2120,14 @@ void processAICard(LogicCard& card) {
   card.state = State_AI_Streaming;
 }
 
-void forceDOIdle(LogicCard& card) {
+void forceDOIdle(LogicCard& card, bool clearCounter = false) {
   card.logicalState = false;
   card.physicalState = false;
   card.triggerFlag = false;
   card.startOnMs = 0;
   card.startOffMs = 0;
   card.repeatCounter = 0;
+  if (clearCounter) card.currentValue = 0;
   card.state = State_DO_Idle;
 }
 
@@ -1951,6 +2140,7 @@ void driveDOHardware(const LogicCard& card, bool driveHardware, bool level,
 }
 
 void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
+  const bool previousPhysical = card.physicalState;
   const bool setCondition = evalCondition(
       card.setA_ID, card.setA_Operator, card.setA_Threshold, card.setB_ID,
       card.setB_Operator, card.setB_Threshold, card.setCombine);
@@ -1967,14 +2157,17 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
   const bool setRisingEdge = setCondition && !prevSet;
 
   if (resetCondition) {
-    forceDOIdle(card);
+    forceDOIdle(card, true);
     driveDOHardware(card, driveHardware, false, isOutputMasked(card.id));
     return;
   }
 
   const bool retriggerable =
       (card.state == State_DO_Idle || card.state == State_DO_Finished);
-  card.triggerFlag = setRisingEdge && retriggerable;
+  // Re-arm behavior: when DO/SIO is idle/finished, allow retrigger even if
+  // setCondition stays high (level retrigger), while still supporting edge
+  // trigger semantics for normal transitions.
+  card.triggerFlag = retriggerable && (setRisingEdge || setCondition);
 
   if (card.triggerFlag) {
     card.logicalState = true;
@@ -2042,6 +2235,11 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
       break;
   }
 
+  // DO/SIO cycle counter: count each OFF->ON transition of effective output.
+  if (!previousPhysical && effectiveOutput) {
+    card.currentValue += 1;
+  }
+
   card.physicalState = effectiveOutput;
   driveDOHardware(card, driveHardware, effectiveOutput, isOutputMasked(card.id));
 }
@@ -2080,11 +2278,12 @@ void processOneScanOrderedCard(uint32_t nowMs, bool honorBreakpoints) {
   }
 }
 
-void runFullScanCycle(uint32_t nowMs, bool honorBreakpoints) {
+bool runFullScanCycle(uint32_t nowMs, bool honorBreakpoints) {
   for (uint8_t i = 0; i < TOTAL_CARDS; ++i) {
     processOneScanOrderedCard(nowMs, honorBreakpoints);
-    if (gBreakpointPaused) return;
+    if (gBreakpointPaused) return false;
   }
+  return true;
 }
 
 void runEngineIteration(uint32_t nowMs, uint32_t& lastScanMs) {
@@ -2100,7 +2299,7 @@ void runEngineIteration(uint32_t nowMs, uint32_t& lastScanMs) {
   }
 
   uint32_t scanInterval = (gRunMode == RUN_SLOW) ? SLOW_SCAN_INTERVAL_MS
-                                                 : SCAN_INTERVAL_MS;
+                                                 : gScanIntervalMs;
   if ((nowMs - lastScanMs) < scanInterval) {
     updateSharedRuntimeSnapshot(nowMs, false);
     return;
@@ -2123,7 +2322,12 @@ void runEngineIteration(uint32_t nowMs, uint32_t& lastScanMs) {
     return;
   }
 
-  runFullScanCycle(nowMs, gRunMode == RUN_BREAKPOINT);
+  uint32_t scanStartUs = micros();
+  bool completedFullScan = runFullScanCycle(nowMs, gRunMode == RUN_BREAKPOINT);
+  uint32_t scanEndUs = micros();
+  if (completedFullScan) {
+    gLastCompleteScanUs = (scanEndUs - scanStartUs);
+  }
   updateSharedRuntimeSnapshot(nowMs, true);
 }
 
@@ -2184,6 +2388,9 @@ void setup() {
     Serial.println("LittleFS mount failed");
     initializeAllCardsSafeDefaults();
   } else {
+    if (!loadPortalSettingsFromLittleFS()) {
+      savePortalSettingsToLittleFS();
+    }
     bootstrapCardsFromStorage();
   }
 
