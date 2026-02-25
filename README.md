@@ -4,6 +4,20 @@ Version: 1.1
 Status: Working Contract
 Applies to: AdvancedTimer Configuration Portal and runtime integration
 
+## End-of-Day Update (February 25, 2026)
+
+Today:
+- Maintained dual-core runtime split (`Core0` deterministic engine, `Core1` portal/network).
+- Kept HTTP/WebSocket portal transport and runtime command channel active.
+- Continued using staged config lifecycle endpoints (`load`, `save`, `validate`, `commit`, `restore`).
+- Kept basic `/config` and `/settings` UIs connected to backend APIs for bring-up.
+
+Open for next session:
+- Finish advanced config UX guardrails and editor polish.
+- Implement per-card analytical timing diagram.
+- Complete debug indicators and breakpoint UX refinement.
+- Add security/session controls and integration/acceptance tests.
+
 ## 1. Purpose
 
 This document is the contract for how the Configuration Portal must look, behave, and integrate with the AdvancedTimer kernel.
@@ -12,7 +26,7 @@ The contract preserves these foundations:
 - No-code, structured LogicCard configuration.
 - Deterministic runtime transparency.
 - Mobile-first field usability.
-- Safe validation via test mode workflows.
+- Safe validation via runtime force/mask workflows.
 - Strict architectural boundaries between UX/networking and kernel execution.
 
 ## Implementation Checklist (Execution Order)
@@ -22,7 +36,7 @@ The contract preserves these foundations:
 3. `[x]` Implement read-only runtime snapshot API/WebSocket stream for header + per-card Live State. HTTP + WebSocket runtime snapshot transport are in place.
 4. `[~]` Implement fixed ordered card list UI bound to firmware scan order (no reorder path). Ordered list rendering exists (`/`, `/config`), but full section-complete card UX is pending.
 5. `[~]` Implement staged configuration editor per card with schema validation and explicit commit flow. Backend config lifecycle endpoints are in place and a basic card editor page is available at `/config`; advanced UX/guardrails still pending.
-6. `[x]` Implement kernel command interface for step, breakpoint, test mode, force/mask controls (command-gated, no direct memory writes). HTTP + WebSocket command transport are in place.
+6. `[x]` Implement kernel command interface for step, run mode, breakpoints, force/mask controls (command-gated, no direct memory writes). HTTP + WebSocket command transport are in place.
 7. `[ ]` Implement per-card analytical timing diagram renderer (static/parameter-derived only, with explicit trigger assumptions).
 8. `[ ]` Implement debug indicators (evaluation pulse, set/reset active, reset override, breakpoint toggle).
 9. `[~]` Implement settings page system administration features (WiFi strategy, security controls, config history, system controls, back/home navigation). Core1 WiFi policy scaffold + basic settings page and endpoints are in place (`/settings`, `/api/settings`, WiFi save/reconnect, reboot); security and config-history management remain.
@@ -30,7 +44,7 @@ The contract preserves these foundations:
 11. `[ ]` Add integration and acceptance tests mapped to Section 16 criteria plus Section 17 settings constraints.
 12. `[ ]` Final contract audit: verify portal behavior matches this document and remove/reword stale implementation comments.
 
-## Current Status Snapshot (February 24, 2026)
+## Current Status Snapshot (February 25, 2026)
 
 Current implementation state:
 - Dual-core scaffold is active (`Core0` deterministic engine task, `Core1` portal/network task).
@@ -38,17 +52,19 @@ Current implementation state:
 - Portal transport is active:
   - HTTP: `/`, `/config`, `/settings`, `/api/snapshot`, `/api/command`, `/api/config/*`, `/api/settings/*`
   - WebSocket: runtime snapshot broadcast + command/result channel on `:81`
-- Simulation-centric testing is supported with no external IO bench:
-  - test mode toggle
-  - input force (DI/AI)
-  - output mask (per-card + global)
+- Runtime IO control is supported with no external IO bench:
+  - input force (DI/AI) available directly from live page controls
+  - output mask (per-card + global) available directly from live page controls
+  - run mode controls (`RUN_NORMAL`, `RUN_SLOW`, `RUN_STEP`, `RUN_BREAKPOINT`)
+  - per-card breakpoint enable/disable from live page controls
 - Config lifecycle backend is implemented:
   - load active
   - staged save
   - staged validate
   - commit/deploy
   - restore (`LKG`, `SLOT1..3`, `FACTORY`)
-- Basic Settings UI and Basic Config Editor UI are implemented and connected to backend APIs.
+- Basic Settings UI and Config Editor UI are implemented and connected to backend APIs.
+- Config Editor UX has humanized field labels and context-aware operator labels.
 - Factory defaults were updated to sensible values; set/reset reference IDs default to self-card.
 
 Known intentionally temporary state:
@@ -164,13 +180,15 @@ For timer-oriented cards, diagram SHOULD visualize:
 
 This section is analytical and static, not simulated.
 
-### 4.4 Simulation Controls Section (Test Mode Only)
+### 4.4 Runtime IO Controls Section
 
-This section MUST be visible only when test mode is active.
+This section is visible on the live page and does not require test mode.
 
 Controls:
-- DI/AI: force toggle, forced value, forced badge.
-- DO: output mask toggle, masked badge.
+- DI: `Real` / `Forced High` / `Forced Low`.
+- AI: `Real` / `Forced Value`.
+- DO: `Direct` / `Masked`.
+- Per-card breakpoint: `Off` / `On`.
 
 Rules:
 - Same kernel and same real-time semantics as normal run.
@@ -271,17 +289,17 @@ If breakpoint is set on card `N`:
 
 Breakpoints MUST NOT interrupt a card mid-evaluation.
 
-### 8.3 Safety During Test/Debug
+### 8.3 Safety During Debug
 
-In test mode:
+Rules:
 - Physical outputs MUST NOT energize when masked.
 - Logical states remain visible and deterministic.
 
-## 9. Simulation/Test Mode Contract
+## 9. Runtime Force/Mask Control Contract
 
-Simulation mode provides safe validation without energizing selected physical outputs.
+Runtime force/mask controls provide safe validation without energizing selected physical outputs.
 
-Simulation rules:
+Control rules:
 - Same kernel, same semantics, same real time.
 - No shadow/simulation-only engine.
 - No virtual clock.
@@ -289,7 +307,6 @@ Simulation rules:
 
 ### 9.1 Output Masking
 
-When test mode is active:
 - Logic still computes output states normally.
 - Masked outputs skip physical relay drive.
 - Masking MAY be global or per-channel.
@@ -318,7 +335,7 @@ Input forcing MUST NOT mutate persisted configuration unless explicitly committe
 
 ### 9.3 Timing and State Preservation
 
-Entering/exiting test mode MUST:
+Changing control mode (`Real`/`Forced`/`Masked`) MUST:
 - Keep timers in real time.
 - Preserve latch/counter/timer states.
 - Avoid engine restart requirements.
@@ -336,9 +353,9 @@ Force behavior:
 - Force affects input source selection only (DI/AI acquisition path).
 - Force MUST NOT change logic semantics, timing semantics, or scan order.
 
-### 9.4 Test Mode + Step
+### 9.4 Step + Breakpoint Interactions
 
-Test mode and step mode MAY be combined.
+Step mode and breakpoint mode MAY be combined with force/mask controls.
 
 When combined:
 - One full card evaluation per step.
@@ -347,10 +364,10 @@ When combined:
 
 ### 9.5 Operator Indication
 
-When test mode is active, UI MUST clearly show persistent indicators:
-- `TEST MODE ACTIVE`
+UI MUST clearly show persistent indicators:
 - `OUTPUT MASKED`
 - `INPUT FORCED`
+- `BREAKPOINT PAUSED` (when paused in `RUN_BREAKPOINT`)
 
 Operators MUST always be able to distinguish real vs forced/masked IO.
 
@@ -731,9 +748,9 @@ DO/SIO modes:
 
 | Mode | First action | Input dependency | Repeat behavior |
 | --- | --- | --- | --- |
-| `Mode_DO_Normal` | Wait `setting1` (`OnDelay`), then active | Latched | Cycles `2..N` run full cycle |
-| `Mode_DO_Immediate` | Active immediately on first cycle | Latched | Cycles `2..N` run full cycle |
-| `Mode_DO_Gated` | Wait `setting1`, then active | Gated (`setCondition` must remain true) | Full cycle only while gate remains true |
+| `Mode_DO_Normal` | Wait `setting1` (Delay Before ON), then turn ON for `setting2` | Latched | Cycles `2..N` run full cycle |
+| `Mode_DO_Immediate` | Turn ON immediately, then keep ON for `setting2` | Latched | Cycles `2..N` run full cycle |
+| `Mode_DO_Gated` | Wait `setting1` (Delay Before ON), then turn ON for `setting2` | Gated (`setCondition` must remain true) | Full cycle only while gate remains true |
 
 Rules:
 - Legacy DO/SIO mode values are compatibility-only and deprecated for new configuration.
@@ -744,8 +761,8 @@ Rules:
 | Enum | Meaning |
 | --- | --- |
 | `State_DO_Idle` | DO/SIO idle/re-armable state |
-| `State_DO_OnDelay` | DO/SIO in pre-activation delay |
-| `State_DO_Active` | DO/SIO active phase |
+| `State_DO_OnDelay` | DO/SIO in Delay Before ON phase |
+| `State_DO_Active` | DO/SIO output ON duration phase |
 | `State_DO_Finished` | DO/SIO mission complete |
 | `State_AI_Streaming` | AI placeholder state tag in current phase |
 
@@ -775,13 +792,13 @@ Family-dependent parameter semantics:
   - `setting2`: reserved.
   - `setting3`: reserved/future extension.
 - DO/SIO:
-  - `setting1`: on-delay duration (and pulse-high duration in cycle timing model).
-  - `setting2`: off-delay/rest duration.
+  - `setting1`: delay before output turns ON for each cycle.
+  - `setting2`: ON duration before output turns OFF.
   - `setting3`: repeat count (`0=infinite`, `1=one-shot`, `N>1` exact cycles).
 - AI:
   - `setting1`: input minimum.
   - `setting2`: input maximum.
-  - `setting3`: EMA alpha milliunits `0..1000`.
+  - `setting3`: EMA alpha `0.00..1.00` (stored internally as `0..1000` milliunits).
 
 Runtime core signals:
 - `logicalState`: DI qualified state, DO/SIO mission latch.
@@ -831,7 +848,7 @@ Non-retriggerable rule:
 - New triggers are ignored unless card is in `State_DO_Idle` or `State_DO_Finished`.
 
 Phase model:
-- Canonical phase progression: `Idle -> OnDelay -> Active -> (repeat | Finished/Idle)`.
+- Canonical phase progression: `Idle -> OnDelay (Delay Before ON) -> Active (ON Duration) -> (repeat | Finished/Idle)`.
 
 Repeat semantics:
 - `setting3 = 0`: repeat until RESET.
@@ -844,7 +861,7 @@ RESET semantics:
 - Absolute priority over mode progression.
 
 Gated mode semantics:
-- In `Mode_DO_Gated`, if `setCondition` drops during `OnDelay` or `Active`, mission aborts immediately to idle.
+- In `Mode_DO_Gated`, if `setCondition` drops during `OnDelay` (Delay Before ON) or `Active` (ON Duration), mission aborts immediately to idle.
 
 ### 19.8 Analog Input (AI) Contract
 
@@ -854,7 +871,7 @@ Per-scan pipeline:
 1. Sample raw analog input from `hwPin`.
 2. Clamp raw value to `[setting1, setting2]`.
 3. Scale linearly into `[startOnMs, startOffMs]`.
-4. Apply EMA filter using `setting3` alpha milliunits.
+4. Apply EMA filter using `setting3` alpha (`0.00..1.00`).
 5. Store filtered output in `currentValue`.
 
 Current-phase constraints:
@@ -873,7 +890,7 @@ Conversions:
 
 Field scope:
 - Centiunits: `setting1`, `setting2`, `startOnMs`, `startOffMs`, and condition thresholds.
-- Not centiunits: `setting3` for DI/DO/SIO (integer meaning), `setting3` for AI (milliunit alpha), DI/DO/SIO counters in `currentValue`.
+- Not centiunits: `setting3` for DI/DO/SIO (integer meaning), `setting3` for AI (normalized alpha `0.00..1.00`, internally milliunits), DI/DO/SIO counters in `currentValue`.
 
 AI scaling formula:
 - `scaled = startOnMs + (clamped - setting1) * (startOffMs - startOnMs) / (setting2 - setting1)`
@@ -974,7 +991,7 @@ Rules:
 Portal-backend communication is bidirectional and command-capable.
 
 Required command classes:
-- Runtime control commands (portal -> backend, WebSocket): step, run mode, breakpoints, test mode, force, mask.
+- Runtime control commands (portal -> backend, WebSocket): step, run mode, breakpoints, force, mask.
 - Configuration lifecycle commands (portal -> backend, HTTP): load active config, save staged config, validate, commit/deploy, restore.
 - Runtime/status events (backend -> portal, WebSocket): runtime snapshots and command results.
 
@@ -1024,6 +1041,9 @@ Supported commands:
 ```json
 { "name": "set_output_mask", "payload": { "cardId": 8, "masked": true } }
 ```
+
+Notes:
+- `set_test_mode` remains available for compatibility. Current live-page controls no longer require test mode to use force/mask.
 
 Command response:
 
