@@ -151,29 +151,31 @@
           </div>
           <h3>Timing / Params</h3>
           <div class="grid">
-            <div class="field"><label>setting1</label><input id="setting1" type="number" /></div>
-            <div class="field"><label>setting2</label><input id="setting2" type="number" /></div>
-            <div class="field"><label>setting3</label><input id="setting3" type="number" /></div>
+            <div class="field" id="fieldSetting1"><label id="setting1Label">setting1</label><input id="setting1" type="number" /></div>
+            <div class="field" id="fieldSetting2"><label id="setting2Label">setting2</label><input id="setting2" type="number" /></div>
+            <div class="field" id="fieldSetting3"><label id="setting3Label">setting3</label><input id="setting3" type="number" /></div>
+            <div class="field" id="fieldStartOnMs"><label>Output Minimum</label><input id="startOnMs" type="number" /></div>
+            <div class="field" id="fieldStartOffMs"><label>Output Maximum</label><input id="startOffMs" type="number" /></div>
           </div>
           <h3>SET Group</h3>
           <div class="grid">
-            <div class="field"><label>setA_ID</label><select id="setA_ID"></select></div>
-            <div class="field"><label>setA_Operator</label><select id="setA_Operator"></select></div>
-            <div class="field"><label>setA_Threshold</label><input id="setA_Threshold" type="number" /></div>
-            <div class="field"><label>setB_ID</label><select id="setB_ID"></select></div>
-            <div class="field"><label>setB_Operator</label><select id="setB_Operator"></select></div>
-            <div class="field"><label>setB_Threshold</label><input id="setB_Threshold" type="number" /></div>
-            <div class="field"><label>setCombine</label><select id="setCombine"></select></div>
+            <div class="field"><label>Set A Source</label><select id="setA_ID"></select></div>
+            <div class="field"><label>Set A Operator</label><select id="setA_Operator"></select></div>
+            <div class="field"><label>Set A Threshold</label><input id="setA_Threshold" type="number" /></div>
+            <div class="field"><label>Set B Source</label><select id="setB_ID"></select></div>
+            <div class="field"><label>Set B Operator</label><select id="setB_Operator"></select></div>
+            <div class="field"><label>Set B Threshold</label><input id="setB_Threshold" type="number" /></div>
+            <div class="field"><label>Set Combine Mode</label><select id="setCombine"></select></div>
           </div>
           <h3>RESET Group</h3>
           <div class="grid">
-            <div class="field"><label>resetA_ID</label><select id="resetA_ID"></select></div>
-            <div class="field"><label>resetA_Operator</label><select id="resetA_Operator"></select></div>
-            <div class="field"><label>resetA_Threshold</label><input id="resetA_Threshold" type="number" /></div>
-            <div class="field"><label>resetB_ID</label><select id="resetB_ID"></select></div>
-            <div class="field"><label>resetB_Operator</label><select id="resetB_Operator"></select></div>
-            <div class="field"><label>resetB_Threshold</label><input id="resetB_Threshold" type="number" /></div>
-            <div class="field"><label>resetCombine</label><select id="resetCombine"></select></div>
+            <div class="field"><label>Reset A Source</label><select id="resetA_ID"></select></div>
+            <div class="field"><label>Reset A Operator</label><select id="resetA_Operator"></select></div>
+            <div class="field"><label>Reset A Threshold</label><input id="resetA_Threshold" type="number" /></div>
+            <div class="field"><label>Reset B Source</label><select id="resetB_ID"></select></div>
+            <div class="field"><label>Reset B Operator</label><select id="resetB_Operator"></select></div>
+            <div class="field"><label>Reset B Threshold</label><input id="resetB_Threshold" type="number" /></div>
+            <div class="field"><label>Reset Combine Mode</label><select id="resetCombine"></select></div>
           </div>
           <div class="row" style="margin-top:10px;">
             <button id="btnApplyCard">Apply Card Changes</button>
@@ -202,6 +204,48 @@
       const opTrigger = ["Op_Triggered", "Op_TriggerCleared"];
       const opProcess = ["Op_Running", "Op_Finished", "Op_Stopped"];
       const combines = ["Combine_None", "Combine_AND", "Combine_OR"];
+      const settingLabelsByType = {
+        DigitalInput: {
+          setting1: "Debounce Time (s)",
+          setting2: "Reserved",
+          setting3: "Reserved"
+        },
+        DigitalOutput: {
+          setting1: "Delay Before ON (s)",
+          setting2: "ON Duration (s)",
+          setting3: "Repeat Count (0 = infinite)"
+        },
+        SoftIO: {
+          setting1: "Delay Before ON (s)",
+          setting2: "ON Duration (s)",
+          setting3: "Repeat Count (0 = infinite)"
+        },
+        AnalogInput: {
+          setting1: "Input Minimum",
+          setting2: "Input Maximum",
+          setting3: "EMA Alpha (0.00..1.00)"
+        }
+      };
+      const modeLabelsByType = {
+        DigitalInput: {
+          Mode_DI_Rising: "DI Rising Edge",
+          Mode_DI_Falling: "DI Falling Edge",
+          Mode_DI_Change: "DI Any Change"
+        },
+        AnalogInput: {
+          Mode_AI_Continuous: "AI Continuous"
+        },
+        DigitalOutput: {
+          Mode_DO_Normal: "DO Normal",
+          Mode_DO_Immediate: "DO Immediate",
+          Mode_DO_Gated: "DO Gated"
+        },
+        SoftIO: {
+          Mode_DO_Normal: "SIO Normal",
+          Mode_DO_Immediate: "SIO Immediate",
+          Mode_DO_Gated: "SIO Gated"
+        }
+      };
 
       const state = { activeVersion: "", cards: [], selectedId: -1 };
       state.validationOk = false;
@@ -233,10 +277,10 @@
       }
 
       function cardFriendlyName(card) {
-        if (card.type === "DigitalInput") return `DI${card.index}`;
-        if (card.type === "AnalogInput") return `AI${card.index}`;
-        if (card.type === "DigitalOutput") return `DO${card.index}`;
-        if (card.type === "SoftIO") return `Soft IO${card.index}`;
+        if (card.type === "DigitalInput") return `Digital Input ${card.index}`;
+        if (card.type === "AnalogInput") return `Analog Input ${card.index}`;
+        if (card.type === "DigitalOutput") return `Digital Output ${card.index}`;
+        if (card.type === "SoftIO") return `Soft IO ${card.index}`;
         return `Card ${card.id}`;
       }
 
@@ -246,7 +290,7 @@
         state.cards.forEach((c) => {
           const opt = document.createElement("option");
           opt.value = String(c.id);
-          opt.textContent = `${cardFriendlyName(c)} (#${c.id})`;
+          opt.textContent = cardFriendlyName(c);
           sel.appendChild(opt);
         });
         sel.value = String(selectedId ?? 0);
@@ -262,6 +306,20 @@
         fillSelect("resetCombine", combines);
       }
 
+      function initNumberInputConstraints() {
+        [
+          "hwPin",
+          "setting1", "setting2", "setting3",
+          "startOnMs", "startOffMs",
+          "setA_Threshold", "setB_Threshold",
+          "resetA_Threshold", "resetB_Threshold"
+        ].forEach((id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.min = "0";
+        });
+      }
+
       function allowedOperatorsForTargetType(type) {
         if (type === "AnalogInput") return [...opAlways, ...opNumeric];
         if (type === "DigitalInput") return [...opAlways, ...opState, ...opTrigger, ...opNumeric];
@@ -269,6 +327,36 @@
           return [...opAlways, ...opState, ...opTrigger, ...opNumeric, ...opProcess];
         }
         return [...opAlways];
+      }
+
+      function operatorLabelForTargetType(targetType, op) {
+        const isAI = targetType === "AnalogInput";
+        const isCounterTarget =
+          targetType === "DigitalInput" ||
+          targetType === "DigitalOutput" ||
+          targetType === "SoftIO";
+        const metric = isAI ? "Analog Value" : (isCounterTarget ? "Counter" : "Value");
+
+        const labels = {
+          Op_AlwaysTrue: "Always True",
+          Op_AlwaysFalse: "Always False",
+          Op_LogicalTrue: "Logical State is ON",
+          Op_LogicalFalse: "Logical State is OFF",
+          Op_PhysicalOn: "Physical State is ON",
+          Op_PhysicalOff: "Physical State is OFF",
+          Op_Triggered: "Triggered",
+          Op_TriggerCleared: "Trigger Cleared",
+          Op_GT: `${metric} > Threshold`,
+          Op_LT: `${metric} < Threshold`,
+          Op_EQ: `${metric} = Threshold`,
+          Op_NEQ: `${metric} != Threshold`,
+          Op_GTE: `${metric} >= Threshold`,
+          Op_LTE: `${metric} <= Threshold`,
+          Op_Running: "Process Running",
+          Op_Finished: "Process Finished",
+          Op_Stopped: "Process Stopped"
+        };
+        return labels[op] || op;
       }
 
       function ensureSelectValue(id, allowed, currentValue) {
@@ -280,7 +368,58 @@
 
       function refreshModeOptions(card) {
         const allowedModes = modeByType[card.type] || [];
-        ensureSelectValue("mode", allowedModes, card.mode);
+        const sel = document.getElementById("mode");
+        if (!sel) return;
+        sel.innerHTML = "";
+        allowedModes.forEach((mode) => {
+          const opt = document.createElement("option");
+          opt.value = mode;
+          opt.textContent = modeLabelsByType[card.type]?.[mode] || mode;
+          sel.appendChild(opt);
+        });
+        sel.value = allowedModes.includes(card.mode) ? card.mode : (allowedModes[0] || "");
+      }
+
+      function refreshSettingLabels(card) {
+        const labels = settingLabelsByType[card.type] || {
+          setting1: "setting1",
+          setting2: "setting2",
+          setting3: "setting3"
+        };
+        document.getElementById("setting1Label").textContent = labels.setting1;
+        document.getElementById("setting2Label").textContent = labels.setting2;
+        document.getElementById("setting3Label").textContent = labels.setting3;
+      }
+
+      function setFieldVisible(fieldId, visible) {
+        const field = document.getElementById(fieldId);
+        if (!field) return;
+        field.style.display = visible ? "" : "none";
+      }
+
+      function refreshVisibleParamFields(card) {
+        const isDI = card.type === "DigitalInput";
+        const isAI = card.type === "AnalogInput";
+        const isDOorSIO = card.type === "DigitalOutput" || card.type === "SoftIO";
+
+        setFieldVisible("fieldSetting1", isDI || isAI || isDOorSIO);
+        setFieldVisible("fieldSetting2", isAI || isDOorSIO);
+        setFieldVisible("fieldSetting3", isAI || isDOorSIO);
+        setFieldVisible("fieldStartOnMs", isAI);
+        setFieldVisible("fieldStartOffMs", isAI);
+
+        const setting3Input = document.getElementById("setting3");
+        if (setting3Input) {
+          if (isAI) {
+            setting3Input.step = "0.01";
+            setting3Input.min = "0";
+            setting3Input.max = "1";
+          } else {
+            setting3Input.step = "1";
+            setting3Input.min = "0";
+            setting3Input.removeAttribute("max");
+          }
+        }
       }
 
       function refreshOperatorOptions(card) {
@@ -292,10 +431,25 @@
         const typeSetB = getTypeByRef(card.setB_ID);
         const typeResetA = getTypeByRef(card.resetA_ID);
         const typeResetB = getTypeByRef(card.resetB_ID);
-        ensureSelectValue("setA_Operator", allowedOperatorsForTargetType(typeSetA), card.setA_Operator);
-        ensureSelectValue("setB_Operator", allowedOperatorsForTargetType(typeSetB), card.setB_Operator);
-        ensureSelectValue("resetA_Operator", allowedOperatorsForTargetType(typeResetA), card.resetA_Operator);
-        ensureSelectValue("resetB_Operator", allowedOperatorsForTargetType(typeResetB), card.resetB_Operator);
+
+        const renderOperatorSelect = (id, targetType, currentValue) => {
+          const allowed = allowedOperatorsForTargetType(targetType);
+          const sel = document.getElementById(id);
+          if (!sel) return;
+          sel.innerHTML = "";
+          allowed.forEach((op) => {
+            const opt = document.createElement("option");
+            opt.value = op;
+            opt.textContent = operatorLabelForTargetType(targetType, op);
+            sel.appendChild(opt);
+          });
+          sel.value = allowed.includes(currentValue) ? currentValue : (allowed[0] || "");
+        };
+
+        renderOperatorSelect("setA_Operator", typeSetA, card.setA_Operator);
+        renderOperatorSelect("setB_Operator", typeSetB, card.setB_Operator);
+        renderOperatorSelect("resetA_Operator", typeResetA, card.resetA_Operator);
+        renderOperatorSelect("resetB_Operator", typeResetB, card.resetB_Operator);
       }
 
       function refreshReferenceIdOptions(card) {
@@ -309,13 +463,30 @@
         return state.cards.find((c) => c.id === id);
       }
 
+      function isTimeFieldForCard(card, fieldName) {
+        const isDOorSIO = card.type === "DigitalOutput" || card.type === "SoftIO";
+        if (fieldName === "setting1") return card.type === "DigitalInput" || isDOorSIO;
+        if (fieldName === "setting2") return isDOorSIO;
+        return false;
+      }
+
+      function msToSecondsDisplay(ms) {
+        const n = Number(ms || 0);
+        return (n / 1000).toFixed(2);
+      }
+
+      function secondsToMs(seconds) {
+        const n = Number(seconds || 0);
+        return Math.round(n * 1000);
+      }
+
       function renderCardList() {
         const list = document.getElementById("cardList");
         list.innerHTML = "";
         state.cards.forEach((c) => {
           const btn = document.createElement("button");
           btn.className = `card-btn ${state.selectedId === c.id ? "active" : ""}`;
-          btn.textContent = `#${c.id} ${c.type} [${c.index}]`;
+          btn.textContent = cardFriendlyName(c);
           btn.onclick = () => { state.selectedId = c.id; renderAll(); };
           list.appendChild(btn);
         });
@@ -333,15 +504,35 @@
         document.getElementById("editorTitle").textContent = `Card #${c.id} Editor`;
         [
           "id", "type", "index", "hwPin", "setting1", "setting2", "setting3",
+          "startOnMs", "startOffMs",
           "setA_ID", "setA_Operator", "setA_Threshold",
           "setB_ID", "setB_Operator", "setB_Threshold", "setCombine",
           "resetA_ID", "resetA_Operator", "resetA_Threshold",
           "resetB_ID", "resetB_Operator", "resetB_Threshold", "resetCombine",
           "mode"
         ].forEach((k) => setInputValue(k, c[k]));
+
+        if (isTimeFieldForCard(c, "setting1")) {
+          setInputValue("setting1", msToSecondsDisplay(c.setting1));
+        }
+        if (isTimeFieldForCard(c, "setting2")) {
+          setInputValue("setting2", msToSecondsDisplay(c.setting2));
+        }
+
+        const setting1Input = document.getElementById("setting1");
+        const setting2Input = document.getElementById("setting2");
+        if (setting1Input) {
+          setting1Input.step = isTimeFieldForCard(c, "setting1") ? "0.01" : "1";
+        }
+        if (setting2Input) {
+          setting2Input.step = isTimeFieldForCard(c, "setting2") ? "0.01" : "1";
+        }
+
         setInputValue("invert", c.invert ? "true" : "false");
         refreshReferenceIdOptions(c);
         refreshModeOptions(c);
+        refreshSettingLabels(c);
+        refreshVisibleParamFields(c);
         refreshOperatorOptions(c);
 
         // Field error highlighting (selected card only).
@@ -362,9 +553,15 @@
         c.hwPin = n("hwPin");
         c.invert = s("invert") === "true";
         c.mode = s("mode");
-        c.setting1 = n("setting1");
-        c.setting2 = n("setting2");
-        c.setting3 = n("setting3");
+        c.setting1 = isTimeFieldForCard(c, "setting1") ? secondsToMs(s("setting1")) : n("setting1");
+        if (c.type !== "DigitalInput") {
+          c.setting2 = isTimeFieldForCard(c, "setting2") ? secondsToMs(s("setting2")) : n("setting2");
+          c.setting3 = n("setting3");
+        }
+        if (c.type === "AnalogInput") {
+          c.startOnMs = n("startOnMs");
+          c.startOffMs = n("startOffMs");
+        }
         c.setA_ID = n("setA_ID");
         c.setA_Operator = s("setA_Operator");
         c.setA_Threshold = n("setA_Threshold");
@@ -444,11 +641,29 @@
         const checkRef = (v, field) => {
           if (!Number.isInteger(v) || v < 0 || v > maxId) errors[field] = "Out of range";
         };
-        ["setting1", "setting2", "setting3", "hwPin", "setA_Threshold",
+        ["setting1", "hwPin", "setA_Threshold",
          "setB_Threshold", "resetA_Threshold", "resetB_Threshold"].forEach((field) => {
           const v = Number(selected[field]);
           if (!Number.isFinite(v) || v < 0) errors[field] = "Invalid";
         });
+        if (selected.type !== "DigitalInput") {
+          ["setting2", "setting3"].forEach((field) => {
+            const v = Number(selected[field]);
+            if (!Number.isFinite(v) || v < 0) errors[field] = "Invalid";
+          });
+        }
+        if (selected.type === "AnalogInput") {
+          const alpha = Number(selected.setting3);
+          if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+            errors.setting3 = "Must be between 0.00 and 1.00";
+          }
+        }
+        if (selected.type === "AnalogInput") {
+          ["startOnMs", "startOffMs"].forEach((field) => {
+            const v = Number(selected[field]);
+            if (!Number.isFinite(v) || v < 0) errors[field] = "Invalid";
+          });
+        }
         checkRef(Number(selected.setA_ID), "setA_ID");
         checkRef(Number(selected.setB_ID), "setB_ID");
         checkRef(Number(selected.resetA_ID), "resetA_ID");
@@ -469,7 +684,8 @@
           return;
         }
 
-        const { ok, data } = await postJson("/api/config/staged/validate", null, true);
+        const payload = { schemaVersion: 1, config: { cards: state.cards } };
+        const { ok, data } = await postJson("/api/config/staged/validate", payload);
         if (!ok || !data.ok) {
           const msg = data?.error?.message || "Validation failed";
           state.validationOk = false;
@@ -491,7 +707,9 @@
           setStatus("Run Validate successfully before Commit", "warn");
           return;
         }
-        const { ok, data } = await postJson("/api/config/commit", null, true);
+        readEditorIntoSelectedCard();
+        const payload = { schemaVersion: 1, config: { cards: state.cards } };
+        const { ok, data } = await postJson("/api/config/commit", payload);
         if (!ok || !data.ok) {
           const msg = data?.error?.message || "Commit failed";
           setStatus(msg, "bad");
@@ -544,6 +762,7 @@
       });
 
       initSelects();
+      initNumberInputConstraints();
       setCommitEnabled(false);
       loadActive();
     </script>

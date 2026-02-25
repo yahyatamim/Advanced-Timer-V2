@@ -52,6 +52,9 @@
         border-radius: 8px;
         padding: 8px 10px;
       }
+      input[type="range"] {
+        padding: 0;
+      }
       .field {
         flex: 1 1 280px;
       }
@@ -109,6 +112,19 @@
       </div>
 
       <div class="panel">
+        <h2>Runtime</h2>
+        <div class="row">
+          <div class="field">
+            <label>Scan Cycle Delay: <span id="scanDelayText">0.50 s</span></label>
+            <input id="scanDelayMs" type="range" min="10" max="1000" step="10" value="500" />
+          </div>
+        </div>
+        <div class="row">
+          <button id="btnSaveRuntime">Save Runtime Settings</button>
+        </div>
+      </div>
+
+      <div class="panel">
         <h2>System</h2>
         <div class="row">
           <button id="btnReboot">Reboot Device</button>
@@ -126,6 +142,11 @@
         el.className = `status ${ok ? "ok" : "bad"}`;
       }
 
+      function updateScanDelayText() {
+        const ms = Number(document.getElementById("scanDelayMs").value || 500);
+        document.getElementById("scanDelayText").textContent = `${(ms / 1000).toFixed(2)} s`;
+      }
+
       async function loadSettings() {
         try {
           const res = await fetch("/api/settings");
@@ -137,6 +158,14 @@
           document.getElementById("masterSsid").value = data.masterSsid || "";
           document.getElementById("userSsid").value = data.userSsid || "";
           document.getElementById("userPassword").value = data.userPassword || "";
+          const scanMin = Number(data.scanIntervalMinMs || 10);
+          const scanMax = Number(data.scanIntervalMaxMs || 1000);
+          const scanValue = Number(data.scanIntervalMs || 500);
+          const scanInput = document.getElementById("scanDelayMs");
+          scanInput.min = String(scanMin);
+          scanInput.max = String(scanMax);
+          scanInput.value = String(Math.min(scanMax, Math.max(scanMin, scanValue)));
+          updateScanDelayText();
           document.getElementById("firmwareVersion").textContent =
             `Firmware: ${data.firmwareVersion || "unknown"}`;
           document.getElementById("wifiStatus").textContent =
@@ -169,6 +198,14 @@
       document.getElementById("btnReconnect").addEventListener("click", async () => {
         const ok = await postJson("/api/settings/reconnect", {});
         setStatus(ok ? "Reconnect requested" : "Reconnect request failed", ok);
+      });
+
+      document.getElementById("scanDelayMs").addEventListener("input", updateScanDelayText);
+
+      document.getElementById("btnSaveRuntime").addEventListener("click", async () => {
+        const scanIntervalMs = Number(document.getElementById("scanDelayMs").value || 500);
+        const ok = await postJson("/api/settings/runtime", { scanIntervalMs });
+        setStatus(ok ? "Runtime settings saved" : "Failed to save runtime settings", ok);
       });
 
       document.getElementById("btnReboot").addEventListener("click", async () => {

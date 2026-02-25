@@ -61,12 +61,14 @@
       }
       h1 { font-size: 20px; }
       h2 { font-size: 16px; }
-      button {
+      button, select, input {
         border: 1px solid var(--line);
         background: #1f2937;
         color: var(--text);
         padding: 8px 10px;
         border-radius: 8px;
+      }
+      button {
         cursor: pointer;
       }
       button:hover { border-color: #64748b; }
@@ -80,6 +82,40 @@
         border-radius: 10px;
         padding: 10px;
       }
+      .ctrl {
+        margin-top: 8px;
+        display: grid;
+        gap: 6px;
+      }
+      .ctrl label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .ctrl .inline {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .seg {
+        display: inline-flex;
+        gap: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .seg .seg-btn {
+        border: 0;
+        border-right: 1px solid var(--line);
+        border-radius: 0;
+        padding: 6px 10px;
+        background: #1f2937;
+      }
+      .seg .seg-btn:last-child { border-right: 0; }
+      .seg .seg-btn.active {
+        background: #0b2a39;
+        color: #eaf6ff;
+      }
       .small { color: var(--muted); font-size: 13px; }
       .status-ok { color: var(--ok); }
       .status-warn { color: var(--warn); }
@@ -92,9 +128,11 @@
         <h1>AdvancedTimer Portal</h1>
         <div class="row">
           <div class="chip">Mode: <strong id="runMode">RUN_NORMAL</strong></div>
-          <div class="chip">Test: <strong id="testMode">OFF</strong></div>
+          <div class="chip">Control: <strong>Always Live</strong></div>
+          <div class="chip">Breakpoint: <strong id="bpState">Running</strong></div>
           <div class="chip">WiFi: <strong id="wifiState">Unknown</strong></div>
           <div class="chip">WS: <strong id="wsState">Down</strong></div>
+          <div class="chip">Scan Work: <strong id="scanWorkMs">0.00 ms</strong></div>
           <div class="chip">Snapshot: <strong id="snapshotSeq">0</strong></div>
         </div>
       </div>
@@ -104,19 +142,22 @@
         <div class="row">
           <button id="btnRefresh">Refresh Snapshot</button>
           <button id="btnStep">Step Once</button>
-          <button id="btnTest">Toggle Test Mode</button>
-          <button id="btnMaskAll">Toggle Global Output Mask</button>
+          <button id="btnRunNormal">Run Continuous</button>
+          <button id="btnRunSlow">Run Slow</button>
+          <button id="btnRunStep">Run Step Mode</button>
+          <button id="btnRunBreakpoint">Run Breakpoint Mode</button>
+          <button id="btnMaskAll">Toggle Global DO Mask</button>
           <button id="btnConfig">Config</button>
           <button id="btnSettings">Settings</button>
         </div>
         <p class="small">
-          This is a starter page. Commands are currently logged locally.
-          Wire these buttons to WebSocket/API next.
+          Input/output controls are always active.
+          Startup defaults are Real inputs and Direct outputs.
         </p>
       </div>
 
       <div class="panel">
-        <h2>Cards (Preview)</h2>
+        <h2>Live IO Controls</h2>
         <div id="cards" class="cards"></div>
       </div>
     </div>
@@ -124,11 +165,13 @@
     <script>
       const state = {
         runMode: "RUN_NORMAL",
-        testMode: false,
         wifiOnline: true,
         wsOnline: false,
         snapshotSeq: 1,
+        lastCompleteScanMs: 0,
         globalMask: false,
+        breakpointPaused: false,
+        pendingUiRefresh: false,
         cards: [
           { id: 0, type: "DigitalInput", logicalState: false, physicalState: false },
           { id: 4, type: "AnalogInput", logicalState: false, physicalState: true },
@@ -136,15 +179,105 @@
         ]
       };
 
+      function cardFriendlyName(c) {
+        if (c.type === "DigitalInput") return `Digital Input ${c.index}`;
+        if (c.type === "AnalogInput") return `Analog Input ${c.index}`;
+        if (c.type === "DigitalOutput") return `Digital Output ${c.index}`;
+        if (c.type === "SoftIO") return `Soft IO ${c.index}`;
+        return `Card ${c.id}`;
+      }
+
+      function boolText(v) {
+        return v ? "ON" : "OFF";
+      }
+
+      function inputModeLabel(c) {
+        const src = c.maskForced?.inputSource || "InputSource_Real";
+        if (src === "InputSource_ForcedHigh") return "Forced High";
+        if (src === "InputSource_ForcedLow") return "Forced Low";
+        if (src === "InputSource_ForcedValue") {
+          return `Forced Value (${c.maskForced?.forcedAIValue ?? 0})`;
+        }
+        return "Real";
+      }
+
+      function outputModeLabel(c) {
+        const masked = !!c.maskForced?.outputMasked;
+        return masked ? "Masked" : "Direct";
+      }
+
+      function liveMetricLabel(c) {
+        if (c.type === "AnalogInput") return "Analog Value";
+        if (c.type === "DigitalInput" || c.type === "DigitalOutput" || c.type === "SoftIO") {
+          return "Counter";
+        }
+        return "Value";
+      }
+
+      async function setInputSource(card, mode) {
+        if (mode === "real") {
+          await sendCommand("set_input_force", { cardId: card.id, forced: false });
+          return;
+        }
+        if (card.type === "DigitalInput") {
+          const high = mode === "forced_high";
+          await sendCommand("set_input_force", { cardId: card.id, forced: true, value: high });
+          return;
+        }
+        if (card.type === "AnalogInput") {
+          const value = Number(card.maskForced?.forcedAIValue ?? 0);
+          await sendCommand("set_input_force", { cardId: card.id, forced: true, value });
+        }
+      }
+
+      async function setAIForcedValue(card, value) {
+        const n = Number(value);
+        const safe = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+        await sendCommand("set_input_force", { cardId: card.id, forced: true, value: safe });
+      }
+
+      async function setDoMask(card, mode) {
+        const masked = mode === "masked";
+        await sendCommand("set_output_mask", { cardId: card.id, masked });
+      }
+
+      async function setRunMode(mode) {
+        await sendCommand("set_run_mode", { mode });
+      }
+
+      async function setBreakpoint(card, enabled) {
+        await sendCommand("set_breakpoint", { cardId: card.id, enabled });
+      }
+
+      function isEditingCardControl() {
+        const active = document.activeElement;
+        if (!active) return false;
+        if (!(active instanceof HTMLElement)) return false;
+        return !!active.closest(".card");
+      }
+
+      function renderSafely() {
+        if (isEditingCardControl()) {
+          state.pendingUiRefresh = true;
+          return;
+        }
+        state.pendingUiRefresh = false;
+        render();
+      }
+
       function render() {
         document.getElementById("runMode").textContent = state.runMode;
-        document.getElementById("testMode").textContent = state.testMode ? "ON" : "OFF";
+        document.getElementById("bpState").innerHTML = state.breakpointPaused
+          ? '<span class="status-warn">Paused</span>'
+          : '<span class="status-ok">Running</span>';
         document.getElementById("wifiState").innerHTML = state.wifiOnline
           ? '<span class="status-ok">Online</span>'
           : '<span class="status-bad">Offline</span>';
         document.getElementById("wsState").innerHTML = state.wsOnline
           ? '<span class="status-ok">Connected</span>'
           : '<span class="status-warn">Polling</span>';
+        document.getElementById("scanWorkMs").textContent =
+          `${Number(state.lastCompleteScanMs || 0).toFixed(2)} ms`;
         document.getElementById("snapshotSeq").textContent = String(state.snapshotSeq);
 
         const cards = document.getElementById("cards");
@@ -152,12 +285,167 @@
         state.cards.forEach((c) => {
           const el = document.createElement("div");
           el.className = "card";
+          let controls = `<div class="small">No direct controls for this card type.</div>`;
+          const breakpointEnabled = !!c.breakpointEnabled;
+
+          if (c.type === "DigitalInput") {
+            const current = c.maskForced?.inputSource || "InputSource_Real";
+            const selected =
+              current === "InputSource_ForcedHigh" ? "forced_high" :
+              current === "InputSource_ForcedLow" ? "forced_low" :
+              "real";
+            controls = `
+              <div class="ctrl">
+                <label>Input Source</label>
+                <div class="inline">
+                  <div class="seg">
+                    <button class="seg-btn io-di-source ${selected === "real" ? "active" : ""}" data-id="${c.id}" data-mode="real">Real</button>
+                    <button class="seg-btn io-di-source ${selected === "forced_high" ? "active" : ""}" data-id="${c.id}" data-mode="forced_high">Forced High</button>
+                    <button class="seg-btn io-di-source ${selected === "forced_low" ? "active" : ""}" data-id="${c.id}" data-mode="forced_low">Forced Low</button>
+                  </div>
+                  <span class="small">Now: ${inputModeLabel(c)}</span>
+                </div>
+              </div>
+            `;
+          } else if (c.type === "AnalogInput") {
+            const current = c.maskForced?.inputSource || "InputSource_Real";
+            const selected = current === "InputSource_ForcedValue" ? "forced_value" : "real";
+            const forcedValue = Number(c.maskForced?.forcedAIValue ?? 0);
+            const disabled = selected === "real" ? "disabled" : "";
+            controls = `
+              <div class="ctrl">
+                <label>Input Source</label>
+                <div class="inline">
+                  <div class="seg">
+                    <button class="seg-btn io-ai-source-toggle ${selected === "real" ? "active" : ""}" data-id="${c.id}" data-mode="real">Real</button>
+                    <button class="seg-btn io-ai-source-toggle ${selected === "forced_value" ? "active" : ""}" data-id="${c.id}" data-mode="forced_value">Forced Value</button>
+                  </div>
+                  <span class="small">Now: ${inputModeLabel(c)}</span>
+                </div>
+                <div class="inline">
+                  <input class="io-ai-value" data-id="${c.id}" type="number" min="0" step="1" value="${forcedValue}" ${disabled} />
+                  <button class="io-ai-apply" data-id="${c.id}" ${disabled}>Apply Value</button>
+                </div>
+              </div>
+            `;
+          } else if (c.type === "DigitalOutput") {
+            const selected = c.maskForced?.outputMaskLocal ? "masked" : "direct";
+            controls = `
+              <div class="ctrl">
+                <label>Output Drive</label>
+                <div class="inline">
+                  <div class="seg">
+                    <button class="seg-btn io-do-mask ${selected === "direct" ? "active" : ""}" data-id="${c.id}" data-mode="direct">Direct</button>
+                    <button class="seg-btn io-do-mask ${selected === "masked" ? "active" : ""}" data-id="${c.id}" data-mode="masked">Masked</button>
+                  </div>
+                  <span class="small">Now: ${outputModeLabel(c)}</span>
+                </div>
+              </div>
+            `;
+          }
+
           el.innerHTML = `
-            <div><strong>#${c.id}</strong> ${c.type}</div>
-            <div class="small">Logical: ${c.logicalState}</div>
-            <div class="small">Physical: ${c.physicalState}</div>
+            <div><strong>${cardFriendlyName(c)}</strong></div>
+            <div class="small">Logical: ${boolText(!!c.logicalState)}</div>
+            <div class="small">Physical: ${boolText(!!c.physicalState)}</div>
+            <div class="small">${liveMetricLabel(c)}: ${Number(c.currentValue || 0)}</div>
+            <div class="small">State: ${c.state || "-"}</div>
+            <div class="ctrl">
+              <label>Breakpoint</label>
+              <div class="inline">
+                <div class="seg">
+                  <button class="seg-btn io-breakpoint ${breakpointEnabled ? "" : "active"}" data-id="${c.id}" data-mode="off">Off</button>
+                  <button class="seg-btn io-breakpoint ${breakpointEnabled ? "active" : ""}" data-id="${c.id}" data-mode="on">On</button>
+                </div>
+                <span class="small">Now: ${breakpointEnabled ? "Enabled" : "Disabled"}</span>
+              </div>
+            </div>
+            ${controls}
           `;
           cards.appendChild(el);
+        });
+
+        document.querySelectorAll(".io-di-source").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            const id = Number(ev.currentTarget.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const mode = ev.currentTarget.getAttribute("data-mode") || "real";
+            await setInputSource(card, mode);
+            await fetchSnapshot();
+            renderSafely();
+          });
+        });
+
+        document.querySelectorAll(".io-ai-source-toggle").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            const id = Number(ev.currentTarget.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const mode = ev.currentTarget.getAttribute("data-mode") || "real";
+            if (mode === "real") {
+              await sendCommand("set_input_force", { cardId: id, forced: false });
+            } else {
+              const valueInput = document.querySelector(`.io-ai-value[data-id="${id}"]`);
+              const v = valueInput ? Number(valueInput.value || 0) : Number(card.maskForced?.forcedAIValue ?? 0);
+              await setAIForcedValue(card, v);
+            }
+            await fetchSnapshot();
+            renderSafely();
+          });
+        });
+
+        document.querySelectorAll(".io-ai-apply").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            const id = Number(ev.target.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const isForced = !!document.querySelector(`.io-ai-source-toggle[data-id="${id}"][data-mode="forced_value"].active`);
+            if (!isForced) return;
+            const valueInput = document.querySelector(`.io-ai-value[data-id="${id}"]`);
+            const v = valueInput ? Number(valueInput.value || 0) : 0;
+            await setAIForcedValue(card, v);
+            await fetchSnapshot();
+            renderSafely();
+          });
+        });
+
+        document.querySelectorAll(".io-ai-value").forEach((input) => {
+          input.addEventListener("keydown", async (ev) => {
+            if (ev.key !== "Enter") return;
+            const id = Number(ev.target.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const isForced = !!document.querySelector(`.io-ai-source-toggle[data-id="${id}"][data-mode="forced_value"].active`);
+            if (!isForced) return;
+            await setAIForcedValue(card, Number(ev.target.value || 0));
+            await fetchSnapshot();
+            renderSafely();
+          });
+        });
+
+        document.querySelectorAll(".io-do-mask").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            const id = Number(ev.currentTarget.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const mode = ev.currentTarget.getAttribute("data-mode") || "direct";
+            await setDoMask(card, mode);
+            await fetchSnapshot();
+            renderSafely();
+          });
+        });
+
+        document.querySelectorAll(".io-breakpoint").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            const id = Number(ev.currentTarget.getAttribute("data-id"));
+            const card = state.cards.find((x) => x.id === id);
+            if (!card) return;
+            const mode = ev.currentTarget.getAttribute("data-mode") || "off";
+            await setBreakpoint(card, mode === "on");
+            await fetchSnapshot();
+            renderSafely();
+          });
         });
       }
 
@@ -167,8 +455,10 @@
           if (!res.ok) return;
           const snap = await res.json();
           state.runMode = snap.runMode || state.runMode;
-          state.testMode = !!(snap.testMode && snap.testMode.active);
           state.wifiOnline = true;
+          state.globalMask = !!(snap.testMode && snap.testMode.outputMaskGlobal);
+          state.breakpointPaused = !!(snap.testMode && snap.testMode.breakpointPaused);
+          state.lastCompleteScanMs = Number(snap.lastCompleteScanMs || 0);
           state.snapshotSeq = snap.snapshotSeq || snap.scanSeq || state.snapshotSeq;
           state.cards = Array.isArray(snap.cards) ? snap.cards : state.cards;
         } catch (_err) {
@@ -182,7 +472,9 @@
 
       function applySnapshot(snap) {
         state.runMode = snap.runMode || state.runMode;
-        state.testMode = !!(snap.testMode && snap.testMode.active);
+        state.globalMask = !!(snap.testMode && snap.testMode.outputMaskGlobal);
+        state.breakpointPaused = !!(snap.testMode && snap.testMode.breakpointPaused);
+        state.lastCompleteScanMs = Number(snap.lastCompleteScanMs || 0);
         state.snapshotSeq = snap.snapshotSeq || snap.scanSeq || state.snapshotSeq;
         state.cards = Array.isArray(snap.cards) ? snap.cards : state.cards;
       }
@@ -208,7 +500,7 @@
             const msg = JSON.parse(ev.data);
             if (msg.type === "runtime_snapshot") {
               applySnapshot(msg);
-              render();
+              renderSafely();
               return;
             }
             if (msg.type === "command_result") {
@@ -263,24 +555,30 @@
       }
 
       document.getElementById("btnRefresh").addEventListener("click", () => {
-        fetchSnapshot().then(render);
+        fetchSnapshot().then(renderSafely);
       });
 
       document.getElementById("btnStep").addEventListener("click", () => {
-        sendCommand("step_once").then(() => fetchSnapshot().then(render));
+        sendCommand("step_once").then(() => fetchSnapshot().then(renderSafely));
       });
 
-      document.getElementById("btnTest").addEventListener("click", () => {
-        state.testMode = !state.testMode;
-        sendCommand("set_test_mode", { active: state.testMode }).then(() =>
-          fetchSnapshot().then(render)
-        );
+      document.getElementById("btnRunNormal").addEventListener("click", () => {
+        setRunMode("RUN_NORMAL").then(() => fetchSnapshot().then(renderSafely));
+      });
+      document.getElementById("btnRunSlow").addEventListener("click", () => {
+        setRunMode("RUN_SLOW").then(() => fetchSnapshot().then(renderSafely));
+      });
+      document.getElementById("btnRunStep").addEventListener("click", () => {
+        setRunMode("RUN_STEP").then(() => fetchSnapshot().then(renderSafely));
+      });
+      document.getElementById("btnRunBreakpoint").addEventListener("click", () => {
+        setRunMode("RUN_BREAKPOINT").then(() => fetchSnapshot().then(renderSafely));
       });
 
       document.getElementById("btnMaskAll").addEventListener("click", () => {
         state.globalMask = !state.globalMask;
         sendCommand("set_output_mask_global", { masked: state.globalMask }).then(() =>
-          fetchSnapshot().then(render)
+          fetchSnapshot().then(renderSafely)
         );
       });
 
@@ -293,9 +591,14 @@
       });
 
       connectWs();
-      fetchSnapshot().then(render);
+      fetchSnapshot().then(renderSafely);
+      document.addEventListener("focusout", () => {
+        setTimeout(() => {
+          if (!isEditingCardControl() && state.pendingUiRefresh) renderSafely();
+        }, 0);
+      });
       setInterval(() => {
-        if (!state.wsOnline) fetchSnapshot().then(render);
+        if (!state.wsOnline) fetchSnapshot().then(renderSafely);
       }, 1000);
     </script>
   </body>
