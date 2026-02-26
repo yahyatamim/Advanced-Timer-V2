@@ -125,6 +125,42 @@ Why this is crucial:
 - Keeps learning cycles short and measurable.
 - Avoids "rewrite stall" where nothing ships for months.
 
+## 11. Make UI/UX Self-Explanatory and Exceptional
+
+What:
+- Treat operator UX as a core product requirement, not decoration.
+- Design workflows so first-time users can configure and operate the system correctly without tutorials.
+- Use clear labels, predictable states, and immediate feedback for every critical action.
+
+Why this is crucial:
+- Reduces training burden and commissioning time.
+- Prevents operator mistakes caused by ambiguous controls.
+- Increases adoption and trust because the system feels obvious and reliable in the field.
+
+## 12. Respect ESP32 Resource Limits and Thermal Reliability
+
+What:
+- Engineer for CPU, RAM, flash, and I/O limits with explicit runtime budgets.
+- Keep deterministic logic lightweight and isolate/limit expensive tasks (portal/network/serialization).
+- Add monitoring and guardrails for loop timing, queue pressure, memory headroom, and sustained load.
+
+Why this is crucial:
+- Prevents overheating and instability under long-run operation.
+- Protects hardware lifespan and long-term field reliability.
+- Ensures future features do not silently degrade timing behavior or system safety margins.
+
+## 13. Keep I/O Topology Scalable and Not Hard-Baked
+
+What:
+- Define DI/DO/AI/SIO channels from declarative pin arrays so channel counts scale at compile time without logic rewrites.
+- Ensure card list generation, IDs, validation, and portal rendering derive from configured channel counts instead of fixed constants.
+- Preserve one deterministic kernel path regardless of whether deployment uses 2 DI, 8 DI, or other supported counts.
+
+Why this is crucial:
+- Avoids forked firmware variants for different hardware builds.
+- Reduces integration errors when product SKUs use different I/O footprints.
+- Keeps maintenance cost low while supporting flexible deployment sizing.
+
 ## Feature Creep Control: Candidate Features and Gating
 
 These features are valid for product direction, but they should enter through controlled gates so PoC scope stays stable.
@@ -185,16 +221,62 @@ PoC stance:
 - Prioritize remote monitoring first.
 - Gate remote control behind explicit safety and authorization requirements.
 
+### 5. Variable-Backed Parameter Assignment
+
+Importance:
+- Enables dynamic behavior where timer/process parameters can be driven by runtime signals instead of fixed constants.
+- Supports real use cases such as "button-triggered run duration proportional to analog input."
+
+Risks:
+- Can reduce predictability if update timing and ownership are not strictly defined.
+- Increases validation complexity (range checks, units, update frequency, fail-safe defaults).
+
+PoC stance:
+- Keep constant parameters as default behavior.
+- Add a gated model where each assignable parameter can select either `Constant` or `Variable` source with strict type/range validation.
+
+### 6. Math Module/Card (Computed Runtime Values)
+
+Importance:
+- Provides a deterministic way to combine multiple inputs (for example add/subtract/scale/clamp) and expose a reusable computed value.
+- Reduces custom per-feature logic by centralizing computations in a dedicated card family.
+
+Risks:
+- Can become an implicit scripting engine if operators/functions are not constrained.
+- Wrong dependency handling can create cycles or unstable update order.
+
+PoC stance:
+- Introduce only a bounded operator set first (`+`, `-`, `*`, `/`, `min`, `max`, `clamp`, optional moving average).
+- Enforce acyclic dependencies, explicit evaluation order, and deterministic fallback on invalid math (for example divide-by-zero policy).
+
+### 7. Portal-Configurable I/O Topology (Advanced)
+
+Importance:
+- Enables field-level flexibility where channel role/count/mapping can be adjusted from Settings without recompiling firmware.
+- Reduces deployment friction for mixed installations and evolving requirements.
+
+Risks:
+- High safety and reliability risk if runtime remapping invalidates existing logic references.
+- Requires strict capability constraints, migration rules, and safe apply/rollback flow to prevent broken configurations.
+
+PoC stance:
+- Keep compile-time pin-array configuration as primary mechanism.
+- Treat portal-configurable topology as a later hardening feature with staged validation, compatibility checks, and transactional commit.
+
 ## Recommended Priority Order (to minimize scope risk)
 
 1. Remote monitoring (read-only)
 2. RTC scheduling
-3. Power-fail runtime persistence hardening
-4. Remote configuration/control over internet
+3. Math module/card (bounded operator set)
+4. Variable-backed parameter assignment
+5. Power-fail runtime persistence hardening
+6. Portal-configurable I/O topology (advanced)
+7. Remote configuration/control over internet
 
 Reasoning:
 - Start with lower-risk, high-visibility capability.
 - Delay internet write/control features until security and reliability baselines are complete.
+- Add computed-value capabilities before variable parameter binding so runtime dependency behavior is explicit and testable.
 
 ## Entry Criteria Before Any New Major Feature
 

@@ -383,6 +383,10 @@ LogicCard logicCards[TOTAL_CARDS] = {};
 bool gPrevSetCondition[TOTAL_CARDS] = {};
 bool gPrevDISample[TOTAL_CARDS] = {};
 bool gPrevDIPrimed[TOTAL_CARDS] = {};
+bool gCardSetResult[TOTAL_CARDS] = {};
+bool gCardResetResult[TOTAL_CARDS] = {};
+bool gCardResetOverride[TOTAL_CARDS] = {};
+uint32_t gCardEvalCounter[TOTAL_CARDS] = {};
 
 struct SharedRuntimeSnapshot {
   uint32_t seq;
@@ -398,6 +402,10 @@ struct SharedRuntimeSnapshot {
   uint32_t forcedAIValue[TOTAL_CARDS];
   bool outputMaskLocal[TOTAL_CARDS];
   bool breakpointEnabled[TOTAL_CARDS];
+  bool setResult[TOTAL_CARDS];
+  bool resetResult[TOTAL_CARDS];
+  bool resetOverride[TOTAL_CARDS];
+  uint32_t evalCounter[TOTAL_CARDS];
 };
 
 QueueHandle_t gKernelCommandQueue = nullptr;
@@ -800,6 +808,13 @@ void appendRuntimeSnapshotCard(JsonArray& cards,
   forced["outputMasked"] =
       (snapshot.globalOutputMask || snapshot.outputMaskLocal[cardId]);
   node["breakpointEnabled"] = snapshot.breakpointEnabled[cardId];
+  node["setResult"] = snapshot.setResult[cardId];
+  node["resetResult"] = snapshot.resetResult[cardId];
+  node["resetOverride"] = snapshot.resetOverride[cardId];
+  node["evalCounter"] = snapshot.evalCounter[cardId];
+  JsonObject debug = node["debug"].to<JsonObject>();
+  debug["evalCounter"] = snapshot.evalCounter[cardId];
+  debug["breakpointEnabled"] = snapshot.breakpointEnabled[cardId];
 }
 
 void serializeRuntimeSnapshot(JsonDocument& doc, uint32_t nowMs) {
@@ -1906,6 +1921,11 @@ void updateSharedRuntimeSnapshot(uint32_t nowMs, bool incrementSeq) {
          sizeof(gCardOutputMask));
   memcpy(gSharedSnapshot.breakpointEnabled, gCardBreakpoint,
          sizeof(gCardBreakpoint));
+  memcpy(gSharedSnapshot.setResult, gCardSetResult, sizeof(gCardSetResult));
+  memcpy(gSharedSnapshot.resetResult, gCardResetResult, sizeof(gCardResetResult));
+  memcpy(gSharedSnapshot.resetOverride, gCardResetOverride,
+         sizeof(gCardResetOverride));
+  memcpy(gSharedSnapshot.evalCounter, gCardEvalCounter, sizeof(gCardEvalCounter));
   portEXIT_CRITICAL(&gSnapshotMux);
 }
 
@@ -2013,6 +2033,11 @@ void processDICard(LogicCard& card, uint32_t nowMs) {
       evalCondition(card.resetA_ID, card.resetA_Operator, card.resetA_Threshold,
                     card.resetB_ID, card.resetB_Operator, card.resetB_Threshold,
                     card.resetCombine);
+  if (card.id < TOTAL_CARDS) {
+    gCardSetResult[card.id] = setCondition;
+    gCardResetResult[card.id] = resetCondition;
+    gCardResetOverride[card.id] = setCondition && resetCondition;
+  }
 
   if (resetCondition) {
     resetDIRuntime(card);
@@ -2080,6 +2105,11 @@ uint32_t clampUInt32(uint32_t value, uint32_t lo, uint32_t hi) {
 }
 
 void processAICard(LogicCard& card) {
+  if (card.id < TOTAL_CARDS) {
+    gCardSetResult[card.id] = false;
+    gCardResetResult[card.id] = false;
+    gCardResetOverride[card.id] = false;
+  }
   uint32_t raw = 0;
   inputSourceMode sourceMode = InputSource_Real;
   if (card.id < TOTAL_CARDS) {
@@ -2148,6 +2178,11 @@ void processDOCard(LogicCard& card, uint32_t nowMs, bool driveHardware) {
       evalCondition(card.resetA_ID, card.resetA_Operator, card.resetA_Threshold,
                     card.resetB_ID, card.resetB_Operator, card.resetB_Threshold,
                     card.resetCombine);
+  if (card.id < TOTAL_CARDS) {
+    gCardSetResult[card.id] = setCondition;
+    gCardResetResult[card.id] = resetCondition;
+    gCardResetOverride[card.id] = setCondition && resetCondition;
+  }
 
   bool prevSet = false;
   if (card.id < TOTAL_CARDS) {
@@ -2270,6 +2305,7 @@ void processCardById(uint8_t cardId, uint32_t nowMs) {
 void processOneScanOrderedCard(uint32_t nowMs, bool honorBreakpoints) {
   uint8_t cardId = scanOrderCardIdFromCursor(gScanCursor);
   processCardById(cardId, nowMs);
+  gCardEvalCounter[cardId] += 1;
 
   gScanCursor = static_cast<uint16_t>((gScanCursor + 1) % TOTAL_CARDS);
 
