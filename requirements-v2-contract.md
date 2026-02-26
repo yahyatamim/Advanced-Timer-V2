@@ -360,6 +360,7 @@ Rules:
 - Reset precedence is mandatory: if set and reset are both true in same evaluation, reset wins.
 - Masking suppresses physical drive only; logical evaluation still executes.
 - DO timer and counter behavior are intrinsic to DO and not delegated to separate timer/counter cards.
+- In `Normal` and `Immediate` modes, a new set trigger received while a mission is already in progress (`OnDelay` or `Active`) must be ignored until the card returns to `Idle` or `Finished`.
 
 ## 8.5 MATH
 
@@ -380,7 +381,7 @@ The MATH card is a versatile, multi-purpose processing block for performing calc
 - **Arithmetic Stage:**
   - `inputA_source`: A `CONSTANT` or `VARIABLE_REF`.
   - `inputB_source`: A `CONSTANT` or `VARIABLE_REF`.
-  - `operator`: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `MIN`, `MAX`, and comparison operators (`GT`, `LT`, `EQ`, etc.) that output `1` or `0`.
+  - `operator`: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `MIN`, `MAX`.
 - **Pipeline Stage:**
   - `rateLimit`: Maximum change in output units per second. An inert value (e.g., `0`) disables this stage.
   - `clampMin`, `clampMax`: The range to which the arithmetic result is clamped.
@@ -428,15 +429,22 @@ The RTC card is a logic component that acts as an independent, configurable sche
 ### 8.6.1 Config requirements
 
 - **`schedule`**: A block defining the single schedule for this card.
-  - `startTime`: The time of day the schedule becomes active (e.g., "14:30:00").
-  - `duration`: The length of time the schedule remains active (e.g., "01:00:00" for one hour).
-  - `recurrence`: A set of rules defining which days the schedule runs.
-    - Examples: `daysOfWeek: [MON, WED, FRI]`, `dayOfMonth: 15`, `date: "2026-12-25"`.
-- **`holidayPolicy`**: Defines behavior on holidays (`IGNORE`, `DO_NOT_RUN`). Refers to a global holiday calendar.
+  - `year` (optional)
+  - `month` (optional)
+  - `day` (optional)
+  - `hour` (required)
+  - `minute` (required)
+  - `second` (required)
+  - `weekday` (optional)
+  - Omitted optional fields are wildcards:
+    - if `month` is omitted, the schedule is valid for all months.
+    - if `weekday` is omitted, the schedule is valid for all weekdays.
+    - if `year` or `day` are omitted, those fields also match all valid values.
+- **`triggerDuration`**: The duration for which the RTC output remains asserted after a matching schedule trigger.
 
 ### 8.6.2 Runtime requirements
 
-- **`logicalState`**: The primary output. Is `true` if the current time from the System Clock Service falls within the card's configured schedule, `false` otherwise.
+- **`logicalState`**: The primary output. Is `true` while the card is inside an active trigger-duration window started by a schedule match; `false` otherwise.
 - **`timeUntilNextStartSec`**: Seconds until the schedule will next become active.
 - **`timeUntilNextEndSec`**: Seconds until the currently active schedule will end.
 
@@ -446,6 +454,8 @@ The RTC card is a logic component that acts as an independent, configurable sche
 - The card itself does not manage time synchronization, timezones, or DST; it is only a schedule evaluator.
 - Its `logicalState` is a standard boolean variable that can be used as an input or condition for any other card in the system.
 - The card has no `set` or `reset` conditions; its state is purely a function of its schedule and the current time.
+- A schedule trigger occurs when current clock fields match all configured non-wildcard schedule fields.
+- On trigger, `logicalState` is asserted for `triggerDuration`; after duration expiry, `logicalState` returns to `false` unless retriggered.
 
 ## 9. Variable Assignment Contract
 
@@ -594,7 +604,7 @@ This section defines the high-level principles and protocol-level rules for the 
 ### 15.1. Command classes
 
 - Runtime control: run mode, step, breakpoint operations.
-- IO control: force input, mask output.
+- IO control: force input, mask output (per-output and global output mask).
 - Config lifecycle: load, save staged, validate, commit, restore.
 - Admin control: reboot, diagnostics reset, session management.
 
