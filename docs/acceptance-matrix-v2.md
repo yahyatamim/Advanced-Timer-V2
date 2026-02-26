@@ -43,13 +43,14 @@ Status: Draft for implementation kickoff
 | AT-DO-004 | Sec 8.4 DO | Mask mode `MASKED` during active mission | Logical mission continues, physical drive suppressed | Yes | Yes | Yes |
 | AT-DO-005 | Sec 8.4 DO | repeatCount finite and zero (infinite) | Finite stops at count; zero continues until reset | Yes | Yes | Yes |
 | AT-DO-006 | Sec 8.4 DO | Integrated timer/counter presence | No external timer/counter dependency required | Yes | No | Yes |
-| AT-DO-007 | Sec 8.4 DO | New set trigger while mission already `OnDelay`/`Active` | Retrigger ignored until `Idle` or `Finished` | Yes | Yes | Yes |
+| AT-DO-007 | Sec 8.4 DO | New set trigger while mission already `ACTIVE` | Retrigger ignored until `IDLE` or `FINISHED` | Yes | Yes | Yes |
+| AT-DO-008 | Sec 8.1, 8.4 | Condition reads DO/SIO `missionState` | `STATE` comparison with `EQ` over `IDLE|ACTIVE|FINISHED` evaluates true on match, false otherwise | Yes | Yes | Yes |
 | AT-SIO-001 | Sec 8.3 SIO | SIO mission timing parity with DO | Phase and counter behavior matches DO semantics | Yes | Yes | Yes |
 | AT-SIO-002 | Sec 8.3 SIO | SIO hardware drive output | No GPIO/relay drive attempts occur | Yes | Yes | Yes |
 | AT-SIO-003 | Sec 8.3 SIO | Mask command against SIO | Mask semantics unavailable/rejected for SIO | Yes | No | Yes |
 | AT-SIO-004 | Sec 8.3 SIO | Unauthorized write attempt | Write denied and audit record emitted | Yes | No | Yes |
 | AT-MATH-001 | Sec 8.5.3 | reset=true regardless of set | currentValue forced to fallbackValue; no further processing | Yes | No | Yes |
-| AT-MATH-002 | Sec 8.5.3 | set=false, reset=false | currentValue holds last value (HOLDING) | Yes | No | Yes |
+| AT-MATH-002 | Sec 8.5.3 | set=false, reset=false | currentValue holds last value until re-enabled/reset | Yes | No | Yes |
 | AT-MATH-003 | Sec 8.5.1.1 | Standard operator correctness: ADD,SUB,MUL,DIV,MOD,POW,MIN,MAX | Arithmetic stage result correct for each operator | Yes | No | Yes |
 | AT-MATH-004 | Sec 8.5.1.1 | Non-arithmetic operator configured | Validation rejects unsupported comparison/logical operators | Yes | No | Yes |
 | AT-MATH-005 | Sec 8.5.3 | Standard pipeline execution order | RateLimit->Clamp->Scale->EMA order preserved | Yes | No | Yes |
@@ -67,11 +68,13 @@ Status: Draft for implementation kickoff
 | AT-BIND-003 | Sec 9.2 | Range/unit mismatch in numeric binding | Validation fails; active config unchanged | Yes | No | Yes |
 | AT-BIND-004 | Sec 9.2, 10 | Forward-cycle dependency via binding | Topology cycle detected; commit blocked | Yes | No | Yes |
 | AT-BIND-005 | Sec 9.3 | Invalid binding among valid edits | Whole commit transaction aborted atomically | Yes | No | Yes |
+| AT-BIND-006 | Sec 9.2 | `STATE` reference to non-DO/SIO card | Validation rejects unsupported state source | Yes | No | Yes |
 | AT-CFG-001 | Sec 11.2 | Missing schemaVersion in payload | Validation rejects with explicit code/message | Yes | No | Yes |
 | AT-CFG-002 | Sec 11.2 | Legacy schema migration to current | Migration deterministic and auditable | Yes | No | Yes |
 | AT-CFG-003 | Sec 11.3, 12.2 | Full config lifecycle state flow | ACTIVE->STAGED->VALIDATED->COMMITTED transitions valid | Yes | No | Yes |
 | AT-CFG-004 | Sec 12.2 | Failure at each commit protocol step | Active remains previous valid config; error surfaced | Yes | Yes | Yes |
-| AT-CFG-005 | Sec 12.1, 12.2 | Rollback slot rotation and LKG preservation | Minimum rollback slots maintained with correct ordering | Yes | Yes | Yes |
+| AT-CFG-005 | Sec 12.1, 12.2 | Single rollback slot rotation and LKG preservation | Active/LKG rotation remains atomic with valid rollback target | Yes | Yes | Yes |
+| AT-CFG-006 | Sec 12.1, 15.1 | Restore source constraints | Only `LKG` and `FACTORY` restore sources are accepted; others rejected | Yes | No | Yes |
 | AT-WIFI-001 | Sec 13.1, 13.2 | Boot connection sequence | Master SSID short timeout then User SSID long timeout | Yes | Yes | Yes |
 | AT-WIFI-002 | Sec 13.2 | Both SSIDs unavailable | Device enters offline mode, kernel remains operational | Yes | Yes | Yes |
 | AT-WIFI-003 | Sec 13.3 | WiFi mode verification | STA-only operation; AP mode disabled | Yes | Yes | Yes |
@@ -85,6 +88,8 @@ Status: Draft for implementation kickoff
 | AT-API-003 | Sec 15.2 | Snapshot API behavior | Always returns latest complete snapshot revision | Yes | No | Yes |
 | AT-API-004 | Sec 15.2 | WebSocket revision ordering under burst events | Event stream preserves increasing revision sequence | Yes | Yes | Yes |
 | AT-API-005 | Sec 15.1 | Global output mask command path | Command applies global mask state and reports acknowledged status | Yes | Yes | Yes |
+| AT-API-006 | Sec 6.3, 15.1 | Invalid run mode command payload (`RUN_SLOW`) | Command rejected with machine-readable validation error | Yes | No | Yes |
+| AT-API-007 | Sec 15.2 | Forward compatibility for additional response fields | Client behavior remains correct when unknown fields are present | Yes | No | No |
 | AT-SEC-001 | Sec 16.1, 16.2 | Role-based access matrix for protected ops | VIEWER/OPERATOR/ENGINEER/ADMIN permissions enforced | Yes | No | Yes |
 | AT-SEC-002 | Sec 16.3 | Successful protected operation audit | Audit record contains all mandatory fields | Yes | No | Yes |
 | AT-SEC-003 | Sec 16.3 | Failed protected operation audit | Failure recorded with actor/role/action/result | Yes | No | Yes |
@@ -104,4 +109,8 @@ These tests are defined as acceptance placeholders and should be finalized when 
 ## 4. Coverage Check
 
 - Required suite prefixes from contract are present: `AT-CORE`, `AT-DI/AI/SIO/DO`, `AT-MATH`, `AT-RTC`, `AT-BIND`, `AT-CFG`, `AT-SEC`, `AT-REL`.
+<<<<<<< HEAD
 - Every major contract section (4 through 20) has at least one mapped acceptance test.
+=======
+- Every major contract section (4 through 20) has at least one mapped acceptance test.
+>>>>>>> 942d78b3b5ec7d4412087cf2f719218ac79c5519

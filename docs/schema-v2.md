@@ -122,6 +122,10 @@ Used by `DI`, `DO`, `SIO`, and `MATH`.
 - `clauseA`: required.
 - `clauseB`: required only when `combiner != NONE`.
 - Clause `operator` enum: `GT|GTE|LT|LTE|EQ|NEQ`.
+- Clause value typing:
+  - `NUMBER`: uses numeric `threshold`.
+  - `BOOL`: uses boolean-as-int `threshold` (`0|1`) with `EQ|NEQ`.
+  - `STATE`: valid only for `DO`/`SIO` `missionState`, value enum `IDLE|ACTIVE|FINISHED`, operator `EQ` only. Non-matching value evaluates to `false`.
 
 ## 7. Card-Type Schemas
 
@@ -187,6 +191,7 @@ Used by `DI`, `DO`, `SIO`, and `MATH`.
 - `repeatCount`: required `uint32`; `0` means infinite.
 - `set`, `reset`: required condition blocks.
 - `writePolicy`: required object.
+- runtime condition-visible state: `missionState` enum `IDLE|ACTIVE|FINISHED`.
 
 ## 7.4 DO
 
@@ -208,6 +213,7 @@ Used by `DI`, `DO`, `SIO`, and `MATH`.
 - `onDuration`: required `uint32`.
 - `repeatCount`: required `uint32`; `0` means infinite.
 - `set`, `reset`: required condition blocks.
+- runtime condition-visible state: `missionState` enum `IDLE|ACTIVE|FINISHED`.
 
 ## 7.5 MATH
 
@@ -235,6 +241,7 @@ Used by `DI`, `DO`, `SIO`, and `MATH`.
 - `mode`: required enum `Mode_Standard_Pipeline|Mode_PID_Controller`.
 - `set`, `reset`: required condition blocks.
 - `fallbackValue`: required `uint32`.
+- no condition-visible `STATE` output is defined for MATH.
 
 `standard` mode fields:
 - `inputA`, `inputB`: required source descriptors.
@@ -322,6 +329,9 @@ Top-level `bindings` allows typed parameter binding.
 - V-CFG-013: reject dependency cycles.
 - V-CFG-014: reject non-owner write-binding attempts.
 - V-CFG-015: reject `wifi.staOnly=false`.
+- V-CFG-016: reject `STATE` source type unless source card type is `DO` or `SIO` and source field is `missionState`.
+- V-CFG-017: reject `STATE` comparison values outside `IDLE|ACTIVE|FINISHED`.
+- V-CFG-018: reject `STATE` comparisons using operators other than `EQ`.
 
 ## 10. Open Decisions To Freeze
 
@@ -336,6 +346,8 @@ Top-level `bindings` allows typed parameter binding.
 - Any prior RTC recurrence/holiday policy structures are removed in V2.
 - Migration to V2 must transform old RTC schedule representation to field-based schedule + `triggerDuration`.
 - Any MATH comparison operators in legacy configs must fail validation or be migrated by explicit rule.
+- Legacy AI `emaAlpha` values stored as milliunits (`0..1000`) must be converted to centiunits (`0..100`) during migration.
+- Restore-source model is reduced to `LKG` (single rollback slot) and `FACTORY`.
 
 ## 12. Next Implementation Artifacts
 

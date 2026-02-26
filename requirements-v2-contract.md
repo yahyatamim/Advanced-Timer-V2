@@ -194,6 +194,13 @@ A condition block (for either `set` or `reset`) is composed of two clauses and a
   - `AND`: The block's result is `true` only if both Clause A and Clause B are true.
   - `OR`: The block's result is `true` if either Clause A or Clause B is true.
 
+State comparison support:
+
+- Condition clauses may reference `STATE` only from `DO` and `SIO` cards via their `missionState`.
+- Valid `missionState` values are `IDLE`, `ACTIVE`, `FINISHED`.
+- For `STATE` comparisons, only `EQ` is valid.
+- If `missionState` does not match the configured comparison value, the clause result is `false`.
+
 ### 8.2. Card Support Matrix
 
 | Card Family | Supports Set/Reset |
@@ -272,7 +279,7 @@ Config requirements:
   - `inputRange` (min/max)
   - `clampRange` (min/max)
   - `outputRange` (min/max)
-  - `emaAlpha` (`0.0..1.0`)
+  - `emaAlpha` (`0..100` centiunits representing `0.00..1.00`)
 
 Runtime requirements:
 
@@ -291,7 +298,7 @@ Force modes:
 Rules:
 
 - AI pipeline is always: `raw -> clamp -> map/scale -> EMA`.
-- EMA is always applied. To disable smoothing behavior, set `alpha = 1.0`.
+- EMA is always applied. To disable smoothing behavior, set `emaAlpha = 100` (`1.00`).
 - AI is a transducer/data-capture card and has no internal logical-condition evaluation.
 - AI does not run set/reset gating semantics internally.
 - AI does not use logicalState/physicalState mission semantics for control behavior.
@@ -315,6 +322,7 @@ Runtime requirements:
 
 - logicalState
 - physicalState
+- missionState (`IDLE`, `ACTIVE`, `FINISHED`)
 - set/reset active indicators
 - reset-dominance indicator
 - cycle counters and mission phase state
@@ -345,9 +353,9 @@ Runtime requirements:
 - masked output result
 - physicalState
 - physical drive state
+- missionState (`IDLE`, `ACTIVE`, `FINISHED`)
 - set/reset active indicators
 - reset-dominance indicator
-- integrated timer phase state (`Idle`, `OnDelay`, `Active`, `Finished`)
 - integrated cycle counter (tracks completed repeat cycles)
 
 Mask modes:
@@ -360,11 +368,11 @@ Rules:
 - Reset precedence is mandatory: if set and reset are both true in same evaluation, reset wins.
 - Masking suppresses physical drive only; logical evaluation still executes.
 - DO timer and counter behavior are intrinsic to DO and not delegated to separate timer/counter cards.
-- In `Normal` and `Immediate` modes, a new set trigger received while a mission is already in progress (`OnDelay` or `Active`) must be ignored until the card returns to `Idle` or `Finished`.
+- In `Normal` and `Immediate` modes, a new set trigger received while a mission is already in progress (`ACTIVE`) must be ignored until the card returns to `IDLE` or `FINISHED`.
 
 ## 8.5 MATH
 
-The MATH card is a versatile, multi-purpose processing block for performing calculations and control loop algorithms. Its entire operation is gated by `set` and `reset` conditions, making it a fully state-aware component.
+The MATH card is a versatile, multi-purpose processing block for performing calculations and control loop algorithms. Its entire operation is gated by `set` and `reset` conditions.
 
 ### 8.5.1 Config requirements
 
@@ -386,7 +394,7 @@ The MATH card is a versatile, multi-purpose processing block for performing calc
   - `rateLimit`: Maximum change in output units per second. An inert value (e.g., `0`) disables this stage.
   - `clampMin`, `clampMax`: The range to which the arithmetic result is clamped.
   - `scaleMin`, `scaleMax`: The range to which the clamped value is scaled.
-  - `emaAlpha`: The alpha for the EMA filter (`0.0` to `1.0`). An inert value of `1.0` effectively disables the filter.
+  - `emaAlpha`: The alpha for the EMA filter (`0..100` centiunits representing `0.00..1.00`). An inert value of `100` effectively disables the filter.
 
 #### 8.5.1.2 `Mode_PID_Controller` Config
 
@@ -398,7 +406,6 @@ The MATH card is a versatile, multi-purpose processing block for performing calc
 
 ### 8.5.2 Runtime requirements
 
-- `state`: The card's operational state (`INHIBITED`, `ACTIVE`, `HOLDING`).
 - `setResult`, `resetResult`: The boolean result of the `set`/`reset` condition evaluations.
 - `intermediateValue`: The value after the arithmetic stage, before the pipeline.
 - `currentValue`: The final output value after all processing.
@@ -418,7 +425,7 @@ The MATH card is a versatile, multi-purpose processing block for performing calc
     - `rateLimit = 0`: Disables the rate limiter.
     - `clampMin >= clampMax`: Disables clamping.
     - `scaleMin == clampMin` AND `scaleMax == clampMax`: Disables scaling.
-    - `emaAlpha = 1.0`: Disables the EMA filter.
+    - `emaAlpha = 100` (`1.00`): Disables the EMA filter.
 4.  **`PID_Controller` Execution**: When active, the card calculates its output based on the standard PID algorithm, respecting the output limits to prevent integral windup. The `set` condition enables the loop, and `reset` disables it and clears the integral term.
 5.  **Faults**: A fault during calculation (e.g., divide-by-zero) MUST force the `currentValue` to the `fallbackValue` for that scan and set a fault flag.
 
@@ -474,7 +481,7 @@ Reference types:
 - `BOOL`
 - `NUMBER`
 - `TIME_WINDOW`
-- `STATE`
+- `STATE` (only `DO`/`SIO` `missionState`: `IDLE|ACTIVE|FINISHED`)
 
 Bindings must satisfy:
 
@@ -542,8 +549,7 @@ Required slots:
 
 - active config
 - staged config
-- LKG config
-- rollback slots (minimum 3)
+- LKG config (single rollback slot for last committed config)
 - factory default config
 
 ## 12.2 Commit protocol (transactional)
@@ -551,7 +557,7 @@ Required slots:
 1. Save staged payload.
 2. Validate staged payload (schema + topology + semantic checks).
 3. Write commit candidate with checksum/version/hash.
-4. Rotate LKG/rollback slots atomically.
+4. Rotate active/LKG atomically (single rollback slot).
 5. Promote candidate to active.
 6. Publish commit result event.
 
