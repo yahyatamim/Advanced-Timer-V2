@@ -31,16 +31,28 @@ Advanced Timer V2 is a deterministic, field-configurable controller with:
 - No arbitrary user-defined expressions.
 - No dynamic card reordering at runtime.
 - No portal/network dependency for deterministic scan execution.
+- No standalone `TIMER` card family.
+- No standalone `COUNTER` card family.
 
 ## 3. Terms
 
 - `Card`: Deterministic processing unit with typed inputs/outputs.
 - `Scan`: One complete ordered evaluation pass of all enabled cards.
-- `Logical state`: Result of card logic before force/mask output policies.
-- `Effective state`: Final state after force/mask policies.
+- `logicalState`: Internal logic/mission state stored per card.
+- `physicalState`: Effective IO-facing state stored per card.
 - `Staged config`: Candidate config pending validate/commit.
 - `Active config`: Running config currently applied.
 - `LKG`: Last known good committed config.
+
+State semantics by family:
+
+- `DI.logicalState`: debounced/qualified logic result after set/reset gating.
+- `DI.physicalState`: polarity-adjusted sampled input state.
+- `DO.logicalState`: mission latch/intent state.
+- `DO.physicalState`: effective time-shaped output state used to drive hardware when not masked.
+- `SIO.logicalState`: mission latch/intent state (same as DO semantics).
+- `SIO.physicalState`: effective time-shaped virtual output state (no hardware drive).
+- `AI`: transducer card; `currentValue` is authoritative output value and AI does not use logical/physical mission semantics.
 
 ## 4. System Architecture Contract
 
@@ -71,6 +83,7 @@ Forbidden coupling:
 
 - Nominal production scan interval: `10 ms`.
 - Allowed configurable scan interval range: `10..1000 ms`.
+- Scan-speed variation is controlled by configured scan interval, not a dedicated slow run mode.
 - Jitter and overrun budgets must be explicitly configured and exposed in diagnostics.
 
 ## 5.2 Deterministic execution rules
@@ -85,7 +98,6 @@ Forbidden coupling:
 Supported run modes:
 
 - `RUN_NORMAL`: evaluate all enabled cards every scan.
-- `RUN_SLOW`: evaluate as normal using slower configured scan interval.
 - `RUN_STEP`: evaluate exactly one card evaluation step per user step command.
 - `RUN_BREAKPOINT`: halt at configured breakpoint boundary; continue on command.
 
@@ -99,6 +111,11 @@ Supported run modes:
 - `DO` (Digital Output)
 - `MATH` (deterministic numeric compute)
 - `RTC` (time and schedule source)
+
+Integrated behavior requirements:
+
+- `DI` includes an integrated qualified-edge counter.
+- `DO` and `SIO` include integrated timer and cycle counter behavior.
 
 ## 6.2 Common card fields
 
@@ -115,10 +132,11 @@ Every card runtime state must include:
 
 - `cardId`
 - `health` (`OK|WARN|FAULT`)
-- `logicalState` (typed by card)
-- `effectiveState` (typed by card)
+- `logicalState` (not used by AI semantics)
+- `physicalState` (not used by AI semantics)
 - `lastEvalUs`
 - `faultCounters` (map)
+- `currentValue` (authoritative numeric output for AI; counter/cycle value for DI/DO/SIO per family rules)
 
 ## 7. Card-Specific Requirements
 
@@ -127,17 +145,22 @@ Every card runtime state must include:
 Config requirements:
 
 - physical channel mapping
-- filter/debounce parameters
-- optional edge mode configuration
-- optional set/reset condition blocks when latch behavior is enabled
+- invert input flag
+- debounce timing parameter
+- edge mode (`RISING`, `FALLING`, `CHANGE`)
+- set condition block
+- reset condition block
+- integrated counter enable/visibility policy
 
 Runtime requirements:
 
 - raw physical read
-- filtered state
-- logical state
-- effective state (after force)
+- polarity-adjusted sample
+- debounced qualified sample
+- logicalState
+- physicalState
 - edge/trigger indicators
+- integrated counter value
 
 Force modes:
 
@@ -147,7 +170,11 @@ Force modes:
 
 Rules:
 
-- Debounce/filter behavior must be deterministic across scans.
+- DI edge mode is mandatory and drives which qualified edges increment the integrated counter.
+- DI logical-state updates and counter increments execute only when set condition is true.
+- DI updates are applied only after debounce qualification timing is satisfied.
+- Reset has strict priority over set: when reset condition is true, DI counter is reset and logical state is held from further update.
+- Invert flag is applied before debounce and edge qualification.
 - Force transitions must not corrupt edge detection counters.
 
 ## 7.2 AI (Analog Input)
@@ -156,17 +183,18 @@ Config requirements:
 
 - physical channel mapping
 - input range and engineering units
-- optional EMA/filter
-- optional hysteresis thresholds
-- out-of-range policy (`CLAMP` or `FAULT_DEFAULT`)
+- input clamp range
+- output mapping range
+- EMA alpha (`0.0..1.0`)
 
 Runtime requirements:
 
 - raw sample
-- scaled value
-- filtered value (if enabled)
+- clamped value
+- mapped/scaled value
+- EMA filtered value
 - quality flag (`GOOD|CLAMPED|INVALID`)
-- logical threshold result when applicable
+- `currentValue` as authoritative AI output
 
 Force modes:
 
@@ -175,6 +203,11 @@ Force modes:
 
 Rules:
 
+- AI pipeline is always: `raw -> clamp -> map/scale -> EMA`.
+- EMA is always applied. To disable smoothing behavior, set `alpha = 1.0`.
+- AI is a transducer/data-capture card and has no internal logical-condition evaluation.
+- AI does not run set/reset gating semantics internally.
+- AI does not use logicalState/physicalState mission semantics for control behavior.
 - Type and unit metadata must be preserved through snapshots.
 - Invalid forced values must be rejected by command validation.
 
@@ -182,18 +215,25 @@ Rules:
 
 Config requirements:
 
-- initial default value
+- DO-equivalent timing and mission parameters (`delay`, `on-duration`, `repeat`)
+- DO-equivalent mode configuration
+- set condition block
+- reset condition block
 - write policy (which roles/commands may write)
 
 Runtime requirements:
 
-- current value
-- source of last write (`KERNEL|COMMAND|RESTORE`)
-- write timestamp
+- logicalState
+- physicalState
+- set/reset active indicators
+- reset-dominance indicator
+- cycle counters and mission phase state
 
 Rules:
 
-- SIO is virtual and has no physical pin dependency.
+- SIO behavior is identical to DO behavior except it has no GPIO binding and never drives hardware.
+- Set/reset precedence, timing phases, gating behavior, and counters must match DO semantics.
+- Because SIO has no physical relay/GPIO drive, SIO mask semantics are not applicable.
 - Unauthorized writes are rejected and audited.
 
 ## 7.4 DO (Digital Output)
@@ -201,16 +241,21 @@ Rules:
 Config requirements:
 
 - physical channel mapping
-- optional delay/min-on/min-off parameters
-- optional latch/reset blocks
+- delay/min-on/min-off parameters
+- timing mode configuration
+- set condition block
+- reset condition block
 
 Runtime requirements:
 
-- logical output result
+- logicalState
 - masked output result
+- physicalState
 - physical drive state
 - set/reset active indicators
 - reset-dominance indicator
+- integrated timer phase state (`Idle`, `OnDelay`, `Active`, `Finished`)
+- integrated cycle counter (OFF->ON transition count / mission cycles as configured)
 
 Mask modes:
 
@@ -221,6 +266,7 @@ Rules:
 
 - Reset precedence is mandatory: if set and reset are both true in same evaluation, reset wins.
 - Masking suppresses physical drive only; logical evaluation still executes.
+- DO timer and counter behavior are intrinsic to DO and not delegated to separate timer/counter cards.
 
 ## 7.5 MATH
 
@@ -506,7 +552,7 @@ Release gate:
 ## 19. Backward Compatibility Policy
 
 - DI/AI/SIO/DO behavior is default-compatible unless explicitly version-gated in schema.
-- New features are opt-in and inert when unused.
+- New features are schema/config gated and must not alter legacy behavior unless explicitly configured.
 - Migration must preserve equivalent behavior for legacy configs.
 
 ## 20. Change Control
