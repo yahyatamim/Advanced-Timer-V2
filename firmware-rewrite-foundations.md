@@ -113,7 +113,20 @@ Why this is crucial:
 - Makes team output consistent.
 - Reduces production defects caused by process gaps.
 
-## 10. Plan Migration Path Instead of Big-Bang Switch
+## 10. Employ Structured and Leveled Logging
+
+What:
+- Implement a macro-based logging framework with multiple levels (e.g., `VERBOSE`, `DEBUG`, `INFO`, `WARN`, `ERROR`).
+- Control the active log level at compile-time via a build flag in `platformio.ini`.
+- Automatically include context (file, line, function) in log messages.
+
+Why this is crucial:
+- Enables verbose, detailed tracing during development without impacting production performance. Log statements below the compiled level are completely removed from the binary, resulting in zero code size or performance overhead.
+- Avoids the messy and error-prone process of manually adding and removing `Serial.print` statements.
+- Provides better context for debugging, speeding up root-cause analysis.
+- Allows for fine-tuned control over log output for different build types (dev, staging, release).
+
+## 11. Plan Migration Path Instead of Big-Bang Switch
 
 What:
 - Build new kernel under compatibility API first.
@@ -125,7 +138,7 @@ Why this is crucial:
 - Keeps learning cycles short and measurable.
 - Avoids "rewrite stall" where nothing ships for months.
 
-## 11. Make UI/UX Self-Explanatory and Exceptional
+## 12. Make UI/UX Self-Explanatory and Exceptional
 
 What:
 - Treat operator UX as a core product requirement, not decoration.
@@ -137,7 +150,7 @@ Why this is crucial:
 - Prevents operator mistakes caused by ambiguous controls.
 - Increases adoption and trust because the system feels obvious and reliable in the field.
 
-## 12. Respect ESP32 Resource Limits and Thermal Reliability
+## 13. Respect ESP32 Resource Limits and Thermal Reliability
 
 What:
 - Engineer for CPU, RAM, flash, and I/O limits with explicit runtime budgets.
@@ -149,7 +162,7 @@ Why this is crucial:
 - Protects hardware lifespan and long-term field reliability.
 - Ensures future features do not silently degrade timing behavior or system safety margins.
 
-## 13. Keep I/O Topology Scalable and Not Hard-Baked
+## 14. Keep I/O Topology Scalable and Not Hard-Baked
 
 What:
 - Define DI/DO/AI/SIO channels from declarative pin arrays so channel counts scale at compile time without logic rewrites.

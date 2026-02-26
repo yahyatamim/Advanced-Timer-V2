@@ -54,7 +54,27 @@ State semantics by family:
 - `SIO.physicalState`: effective time-shaped virtual output state (no hardware drive).
 - `AI`: transducer card; `currentValue` is authoritative output value and AI does not use logical/physical mission semantics.
 
-## 4. System Architecture Contract
+## 4. Data Representation and Validation Contract
+
+This section defines global rules for how data is represented and validated throughout the system.
+
+### 4.1. Fixed-Point "Centiunit" Convention
+
+To avoid the use of floating-point arithmetic in deterministic kernel logic, all configuration parameters that require decimal precision MUST be stored, transmitted, and handled as 32-bit unsigned integers representing the desired value multiplied by 100.
+
+- **Rule**: `stored_value = user_value * 100`.
+- **Example**: A time duration of `1.25` seconds is stored and sent in API payloads as the integer `125`. A threshold of `0.5` is stored as `50`.
+- **Scope**: This applies to all timing parameters, thresholds, and any other fields requiring decimal precision.
+- **Responsibility**: The web portal UI is responsible for all conversions to and from the user-facing decimal format. The firmware kernel exclusively handles the integer form.
+
+### 4.2. Unsigned Value Constraint
+
+All numeric configuration parameters, including all timing values, thresholds, counts, and ranges, MUST be non-negative.
+
+- **Rationale**: The physical and logical concepts represented (e.g., time, counts, duration) do not have a negative equivalent in this system.
+- **Enforcement**: The configuration validation process MUST reject any configuration payload containing a negative value for any parameter. All internal representations for these values should use unsigned integer types.
+
+## 5. System Architecture Contract
 
 ## 4.1 Core ownership
 
@@ -71,29 +91,50 @@ Required logical boundaries:
 - `control`: command validation and dispatch.
 - `storage`: config schema persistence, migration, commit/rollback.
 - `portal`: HTTP/WebSocket endpoints and UI payload mapping.
-- `platform`: board IO adapters, time source, watchdog primitives.
+- `platform`: board IO adapters, time source, watchdog primitives, and a **System Clock Service** (manages time sync and provides authoritative wall-clock time).
 
 Forbidden coupling:
 
 - Kernel must not directly call portal/network/filesystem functions.
 
-## 5. Determinism and Timing Contract
+## 5. State Ownership and Authority Contract
 
-## 5.1 Scan timing targets
+This contract establishes the principle of single, authoritative ownership for all runtime state variables. This is a fundamental rule for ensuring predictable data flow and preventing race conditions.
+
+### 5.1 Single Source of Truth
+
+- Every runtime variable within the system has exactly one **owner**.
+- The owner is the card or service whose internal logic is responsible for generating and updating that variable's value.
+- All other parts of the system may only reference this variable as a **read-only** input for their own logic or for display in snapshots.
+
+### 5.2 Ownership Examples
+
+- The integrated cycle counter of a `DO` card (`currentValue`) is owned exclusively by that `DO` card. Its value is modified only by the card's internal timer and mission logic.
+- The final computed result of a `MATH` card (`currentValue`) is owned exclusively by that `MATH` card. Its value is updated only when the card's own evaluation logic runs.
+- The filtered output of an `AI` card (`currentValue`) is owned exclusively by that `AI` card's internal processing pipeline.
+
+### 5.3 Enforcement
+
+- The configuration validation process **MUST** reject any configuration that attempts to create a write-binding to a variable from a non-owner. For example, a `Variable Assignment` from Card B cannot target a change to Card A's `currentValue`.
+- The dependency topology graph must treat owned variables as root nodes that can only have outgoing (read) edges to consumers.
+
+## 6. Determinism and Timing Contract
+
+## 6.1 Scan timing targets
 
 - Nominal production scan interval: `10 ms`.
 - Allowed configurable scan interval range: `10..1000 ms`.
 - Scan-speed variation is controlled by configured scan interval, not a dedicated slow run mode.
 - Jitter and overrun budgets must be explicitly configured and exposed in diagnostics.
 
-## 5.2 Deterministic execution rules
+## 6.2 Deterministic execution rules
 
 - Card evaluation order is fixed by ascending card ID.
 - One scan produces one immutable snapshot revision.
 - Evaluation topology is built at validate/commit time, never rebuilt during scan.
 - All per-scan work is bounded; unbounded loops/allocations are prohibited in kernel path.
 
-## 5.3 Run modes
+## 6.3 Run modes
 
 Supported run modes:
 
@@ -101,9 +142,9 @@ Supported run modes:
 - `RUN_STEP`: evaluate exactly one card evaluation step per user step command.
 - `RUN_BREAKPOINT`: halt at configured breakpoint boundary; continue on command.
 
-## 6. Card Families and Shared Contract
+## 7. Card Families and Shared Contract
 
-## 6.1 Mandatory card families
+## 7.1 Mandatory card families
 
 - `DI` (Digital Input)
 - `AI` (Analog Input)
@@ -117,7 +158,7 @@ Integrated behavior requirements:
 - `DI` includes an integrated qualified-edge counter.
 - `DO` and `SIO` include integrated timer and cycle counter behavior.
 
-## 6.2 Common card fields
+## 7.2 Common card fields
 
 Every card config must include:
 
@@ -138,16 +179,60 @@ Every card runtime state must include:
 - `faultCounters` (map)
 - `currentValue` (authoritative numeric output for AI; counter/cycle value for DI/DO/SIO per family rules)
 
-## 7. Card-Specific Requirements
+## 8. Set/Reset Condition Contract
 
-## 7.1 DI (Digital Input)
+This section defines the structure and behavior of the condition blocks used to control stateful cards. This logic is the primary mechanism for creating event-driven behavior in the system.
+
+### 8.1. Block Structure
+
+A condition block (for either `set` or `reset`) is composed of two clauses and a combiner, allowing for compound logic.
+
+- **Clause A**: A logical comparison defined by (`source_card_ID`, `operator`, `threshold`).
+- **Clause B**: A second logical comparison defined by (`source_card_ID`, `operator`, `threshold`).
+- **Combiner**: An operator that determines how the results of Clause A and Clause B are combined.
+  - `None`: The block's result is the result of Clause A only.
+  - `AND`: The block's result is `true` only if both Clause A and Clause B are true.
+  - `OR`: The block's result is `true` if either Clause A or Clause B is true.
+
+### 8.2. Card Support Matrix
+
+| Card Family | Supports Set/Reset |
+| :--- | :--- |
+| `DI` (Digital Input) | **Yes** |
+| `DO` (Digital Output) | **Yes** |
+| `SIO` (Soft IO) | **Yes** |
+| `MATH` | **Yes** |
+| `AI` (Analog Input) | No |
+| `RTC` (Real-Time Clock) | No |
+
+### 8.3. Behavioral Contract by Card Type
+
+The final boolean result of a `set` or `reset` block has a different effect depending on the card it belongs to.
+
+- **For `DI` cards**: The `set` condition acts as a **gate**. The card only processes physical input changes and increments its counter when the `set` condition is true. `reset` takes priority, clearing the integrated counter and inhibiting any further updates or edge detection until the reset condition becomes false.
+
+- **For `DO` and `SIO` cards**: A **rising edge** (a transition from `false` to `true` in a single scan) on the `set` condition **triggers the start of a mission** (its timed sequence). `reset` acts as a **hard stop**, immediately aborting any in-progress mission and forcing the card to its idle state.
+
+- **For `MATH` cards**: The `set` condition acts as an **enable gate**. When true, the card actively performs its calculation every scan. When false, the card **holds its last calculated value**. `reset` forces the card's output to its configured `fallbackValue`.
+
+### 8.4. Special Case: `Gated` Mode for DO/SIO
+
+The behavior of the `set` condition changes fundamentally for `DO` and `SIO` cards depending on their `mode`.
+
+- In `Normal` and `Immediate` modes, the `set` condition is **edge-triggered**. It only needs to be true for a single scan to *latch* the mission, which will then run to completion even if the `set` condition becomes false later.
+
+- In `Gated` mode, the `set` condition is **level-triggered**. It must **remain true** for the entire duration of the mission (`delayBeforeON` and `onDuration` phases). If the `set` condition becomes false at any point during the mission, the mission is immediately aborted, and the card returns to its idle state.
+
+## 9. Card-Specific Requirements
+
+## 8.1 DI (Digital Input)
 
 Config requirements:
 
 - physical channel mapping
 - invert input flag
-- debounce timing parameter
-- edge mode (`RISING`, `FALLING`, `CHANGE`)
+- **`debounceTime`**: The primary configuration parameter, defining the time an input must be stable before a change is qualified.
+- `edge mode` (`RISING`, `FALLING`, `CHANGE`)
 - set condition block
 - reset condition block
 - integrated counter enable/visibility policy
@@ -177,15 +262,17 @@ Rules:
 - Invert flag is applied before debounce and edge qualification.
 - Force transitions must not corrupt edge detection counters.
 
-## 7.2 AI (Analog Input)
+## 8.2 AI (Analog Input)
 
 Config requirements:
 
 - physical channel mapping
-- input range and engineering units
-- input clamp range
-- output mapping range
-- EMA alpha (`0.0..1.0`)
+- engineering units
+- **Core pipeline parameters:**
+  - `inputRange` (min/max)
+  - `clampRange` (min/max)
+  - `outputRange` (min/max)
+  - `emaAlpha` (`0.0..1.0`)
 
 Runtime requirements:
 
@@ -211,12 +298,15 @@ Rules:
 - Type and unit metadata must be preserved through snapshots.
 - Invalid forced values must be rejected by command validation.
 
-## 7.3 SIO (Soft IO)
+## 8.3 SIO (Soft IO)
 
 Config requirements:
 
-- DO-equivalent timing and mission parameters (`delay`, `on-duration`, `repeat`)
-- DO-equivalent mode configuration
+- **`mode`**: The card's operational mode, identical to DO (`Normal`, `Immediate`, `Gated`).
+- **Integrated Timer and Counter Parameters**:
+  - `delayBeforeON`: Time from `set` trigger to output activation.
+  - `onDuration`: Duration the output remains active.
+  - `repeatCount`: Number of cycles to run (`0` for infinite).
 - set condition block
 - reset condition block
 - write policy (which roles/commands may write)
@@ -236,13 +326,16 @@ Rules:
 - Because SIO has no physical relay/GPIO drive, SIO mask semantics are not applicable.
 - Unauthorized writes are rejected and audited.
 
-## 7.4 DO (Digital Output)
+## 8.4 DO (Digital Output)
 
 Config requirements:
 
 - physical channel mapping
-- delay/min-on/min-off parameters
-- timing mode configuration
+- **`mode`**: The card's operational mode (`Normal`, `Immediate`, `Gated`).
+- **Integrated Timer and Counter Parameters**:
+  - `delayBeforeON`: Time from `set` trigger to output activation.
+  - `onDuration`: Duration the output remains active.
+  - `repeatCount`: Number of cycles to run (`0` for infinite).
 - set condition block
 - reset condition block
 
@@ -255,7 +348,7 @@ Runtime requirements:
 - set/reset active indicators
 - reset-dominance indicator
 - integrated timer phase state (`Idle`, `OnDelay`, `Active`, `Finished`)
-- integrated cycle counter (OFF->ON transition count / mission cycles as configured)
+- integrated cycle counter (tracks completed repeat cycles)
 
 Mask modes:
 
@@ -268,61 +361,103 @@ Rules:
 - Masking suppresses physical drive only; logical evaluation still executes.
 - DO timer and counter behavior are intrinsic to DO and not delegated to separate timer/counter cards.
 
-## 7.5 MATH
+## 8.5 MATH
 
-Config requirements:
+The MATH card is a versatile, multi-purpose processing block for performing calculations and control loop algorithms. Its entire operation is gated by `set` and `reset` conditions, making it a fully state-aware component.
 
-- operator enum from bounded set:
-  - `ADD`, `SUB`, `MUL`, `DIV`, `MIN`, `MAX`, `CLAMP`
-- ordered input references (typed)
-- constants where operator requires literals
-- divide-by-zero fallback policy and fallback value
+### 8.5.1 Config requirements
 
-Runtime requirements:
+- **`mode`**: Selects the card's primary function.
+  - `Mode_Standard_Pipeline`: A sequential arithmetic and processing chain.
+  - `Mode_PID_Controller`: A Proportional-Integral-Derivative control loop.
+  - Future modes may include `Mode_Totalizer`, `Mode_PeakHold`, etc.
+- **`set` condition block**: Enables the card's operation.
+- **`reset` condition block**: Disables the card and forces its output to the `fallbackValue`. Has priority over `set`.
+- **`fallbackValue`**: The output value when the card is reset or encounters a fault.
 
-- resolved input values
-- computed value
-- validity state
-- last error code (if any)
+#### 8.5.1.1 `Mode_Standard_Pipeline` Config
 
-Rules:
+- **Arithmetic Stage:**
+  - `inputA_source`: A `CONSTANT` or `VARIABLE_REF`.
+  - `inputB_source`: A `CONSTANT` or `VARIABLE_REF`.
+  - `operator`: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `MIN`, `MAX`, and comparison operators (`GT`, `LT`, `EQ`, etc.) that output `1` or `0`.
+- **Pipeline Stage:**
+  - `rateLimit`: Maximum change in output units per second. An inert value (e.g., `0`) disables this stage.
+  - `clampMin`, `clampMax`: The range to which the arithmetic result is clamped.
+  - `scaleMin`, `scaleMax`: The range to which the clamped value is scaled.
+  - `emaAlpha`: The alpha for the EMA filter (`0.0` to `1.0`). An inert value of `1.0` effectively disables the filter.
 
-- Only numeric types allowed.
-- Divide-by-zero must never produce undefined output.
-- Invalid operation sets fault and applies configured fallback deterministically.
+#### 8.5.1.2 `Mode_PID_Controller` Config
 
-## 7.6 RTC
+- `processVariable_source`: A `VARIABLE_REF` to the measured system variable.
+- `setpoint_source`: A `CONSTANT` or `VARIABLE_REF` for the target value.
+- `gainP`, `gainI`, `gainD`: The proportional, integral, and derivative tuning gains.
+- `outputMin`, `outputMax`: Limits for the PID output to prevent integral windup and ensure safe operation.
+- `integralResetPolicy`: Defines behavior for resetting the integral term.
 
-Config requirements:
+### 8.5.2 Runtime requirements
 
-- timezone identifier
-- DST policy mode
-- schedule table (bounded entry count)
-- invalid-time fallback mode
+- `state`: The card's operational state (`INHIBITED`, `ACTIVE`, `HOLDING`).
+- `setResult`, `resetResult`: The boolean result of the `set`/`reset` condition evaluations.
+- `intermediateValue`: The value after the arithmetic stage, before the pipeline.
+- `currentValue`: The final output value after all processing.
+- `faultStatus`: Indicates faults like divide-by-zero.
 
-Runtime requirements:
+### 8.5.3 Rules
 
-- current normalized time
-- time source status (`SYNCED|UNSYNCED|INVALID`)
-- active schedule window flags
-- next schedule transition timestamp (if available)
+1.  **Gating is paramount**: If the `reset` condition is true, the card's `currentValue` is immediately forced to `fallbackValue` and no other processing occurs. If the `set` condition is false, the card holds its last known `currentValue`.
+2.  **`Standard_Pipeline` Execution Order**: When active, the card **MUST** execute the following sequence every scan:
+    1.  `Arithmetic`: `intermediateValue = operator(inputA, inputB)`.
+    2.  `Rate Limiter`: The output is slewed towards `intermediateValue` at the configured rate.
+    3.  `Clamp`: The rate-limited value is clamped.
+    4.  `Scale`: The clamped value is scaled.
+    5.  `EMA Filter`: The scaled value is filtered.
+    6.  The result is stored in `currentValue`.
+3.  **Inert Parameter Values**: To bypass a pipeline stage in `Standard` mode, the user can provide inert values:
+    - `rateLimit = 0`: Disables the rate limiter.
+    - `clampMin >= clampMax`: Disables clamping.
+    - `scaleMin == clampMin` AND `scaleMax == clampMax`: Disables scaling.
+    - `emaAlpha = 1.0`: Disables the EMA filter.
+4.  **`PID_Controller` Execution**: When active, the card calculates its output based on the standard PID algorithm, respecting the output limits to prevent integral windup. The `set` condition enables the loop, and `reset` disables it and clears the integral term.
+5.  **Faults**: A fault during calculation (e.g., divide-by-zero) MUST force the `currentValue` to the `fallbackValue` for that scan and set a fault flag.
 
-Rules:
+## 8.6 RTC
 
-- Time-source loss must produce deterministic fallback behavior.
-- DST transitions must follow explicit configured policy; no implicit assumptions.
+The RTC card is a logic component that acts as an independent, configurable scheduler. It evaluates a single time-based schedule against the global System Clock Service and produces a boolean output state, making it ideal for triggering time-based events.
 
-## 8. Variable Assignment Contract
+### 8.6.1 Config requirements
+
+- **`schedule`**: A block defining the single schedule for this card.
+  - `startTime`: The time of day the schedule becomes active (e.g., "14:30:00").
+  - `duration`: The length of time the schedule remains active (e.g., "01:00:00" for one hour).
+  - `recurrence`: A set of rules defining which days the schedule runs.
+    - Examples: `daysOfWeek: [MON, WED, FRI]`, `dayOfMonth: 15`, `date: "2026-12-25"`.
+- **`holidayPolicy`**: Defines behavior on holidays (`IGNORE`, `DO_NOT_RUN`). Refers to a global holiday calendar.
+
+### 8.6.2 Runtime requirements
+
+- **`logicalState`**: The primary output. Is `true` if the current time from the System Clock Service falls within the card's configured schedule, `false` otherwise.
+- **`timeUntilNextStartSec`**: Seconds until the schedule will next become active.
+- **`timeUntilNextEndSec`**: Seconds until the currently active schedule will end.
+
+### 8.6.3 Rules
+
+- The RTC card's evaluation **MUST** be based on the authoritative time provided by the global System Clock Service.
+- The card itself does not manage time synchronization, timezones, or DST; it is only a schedule evaluator.
+- Its `logicalState` is a standard boolean variable that can be used as an input or condition for any other card in the system.
+- The card has no `set` or `reset` conditions; its state is purely a function of its schedule and the current time.
+
+## 9. Variable Assignment Contract
 
 Variable assignment is a typed binding system for card parameters.
 It is not a scripting engine.
 
-## 8.1 Binding source modes
+## 9.1 Binding source modes
 
 - `CONSTANT`
 - `VARIABLE_REF`
 
-## 8.2 Allowed references
+## 9.2 Allowed references
 
 Reference types:
 
@@ -338,14 +473,14 @@ Bindings must satisfy:
 - unit compatibility (for numeric values)
 - availability in topology (no forward-cycle dependency)
 
-## 8.3 Binding lifecycle
+## 9.3 Binding lifecycle
 
 - Defined in staged config.
 - Fully validated before commit.
 - Applied atomically on successful commit.
 - Any invalid binding aborts whole commit transaction.
 
-## 9. Dependency Topology Contract
+## 10. Dependency Topology Contract
 
 - Graph is directed and acyclic.
 - Nodes are card outputs and bindable parameters.
@@ -365,9 +500,9 @@ On failure:
 - structured error list returned
 - active config unchanged
 
-## 10. Configuration and Schema Contract
+## 11. Configuration and Schema Contract
 
-## 10.1 Model separation
+## 11.1 Model separation
 
 Required separate models:
 
@@ -375,13 +510,13 @@ Required separate models:
 - in-memory runtime state model
 - exported snapshot model
 
-## 10.2 Schema versioning
+## 11.2 Schema versioning
 
 - Config payload must include `schemaVersion`.
 - Migration path must exist for every supported previous version.
 - Migration must be deterministic and auditable.
 
-## 10.3 Config lifecycle states
+## 11.3 Config lifecycle states
 
 - `ACTIVE`
 - `STAGED`
@@ -389,9 +524,9 @@ Required separate models:
 - `COMMITTED`
 - `ROLLED_BACK`
 
-## 11. Persistence and Power-Loss Safety
+## 12. Persistence and Power-Loss Safety
 
-## 11.1 Storage artifacts
+## 12.1 Storage artifacts
 
 Required slots:
 
@@ -401,7 +536,7 @@ Required slots:
 - rollback slots (minimum 3)
 - factory default config
 
-## 11.2 Commit protocol (transactional)
+## 12.2 Commit protocol (transactional)
 
 1. Save staged payload.
 2. Validate staged payload (schema + topology + semantic checks).
@@ -416,23 +551,61 @@ If any step fails:
 - failure is logged and surfaced via API,
 - rollback path remains valid.
 
-## 12. Command and API Contract
+## 13. WiFi Connectivity Contract
 
-## 12.1 Command classes
+This section defines the device's behavior for connecting to a wireless network.
+
+### 13.1. Dual-SSID Strategy
+The device MUST support two WiFi configurations to ensure both field usability and recoverability:
+- **Master SSID**: A permanent, non-editable network configuration intended for factory setup, diagnostics, or emergency field recovery. Default credentials will be hard-coded.
+- **User SSID**: A user-configurable network that the device will use for its primary operational connection.
+
+### 13.2. Connection Logic
+On boot, the device MUST follow this connection sequence:
+1.  Attempt to connect to the **Master SSID** with a short timeout (e.g., 2-3 seconds).
+2.  If the Master SSID fails, attempt to connect to the **User SSID** with a longer timeout (e.g., 3 minutes).
+3.  If both attempts fail, the device MUST enter a fully operational **offline mode**, where the deterministic kernel continues to run without interruption. The device will periodically and non-intrusively re-attempt the connection sequence in the background.
+
+### 13.3. Architectural Constraints
+- **STA Mode Only**: The device MUST operate exclusively in Station (STA) mode to connect to existing WiFi networks. It MUST NOT provide an Access Point (AP) mode.
+- **Non-Blocking Operation**: All WiFi-related tasks (scanning, connecting, handling traffic) MUST execute on the non-deterministic Core 1 and MUST NOT block or interfere with the timing of the scan loop on Core 0.
+
+## 14. Portal UI/UX Contract
+
+This section defines the high-level principles and protocol-level rules for the web-based user interface.
+
+### 14.1. Core UX Philosophy
+- **Mobile-First Industrial Usability**: The UI MUST be optimized for use on mobile devices in field conditions. This requires large, touch-friendly tap targets, high-contrast visuals for readability in varied lighting, and a workflow that minimizes keyboard entry.
+- **Constant Runtime Awareness**: The layout MUST feature a fixed header that is always visible on screen, regardless of scroll position. This header's primary responsibility is to display the most critical, real-time system status:
+  - Current Run Mode (`RUN_NORMAL`, `RUN_STEP`, etc.)
+  - Test / IO Override Status (e.g., `OUTPUTS MASKED`, `INPUTS FORCED`)
+  - Alarm State
+  - Connectivity Status
+- **Clarity and Safety**: The UI must provide clear, unambiguous visual feedback for all critical user actions. It must be impossible for a user to confuse a locally-staged (edited) configuration with the active configuration currently running on the device.
+
+### 14.2. Protocol-Level Rules
+- The portal presents cards in a fixed, deterministic order matching the firmware's scan order.
+- The UI **MUST NOT** recompute or reinterpret authoritative logical results from the firmware. All runtime state displayed to the user must be from the kernel's snapshot.
+- All configuration edits are staged locally in the portal until explicitly sent to the device via the `save staged` or `commit` API commands.
+- Runtime controls in the UI (e.g., Force, Mask buttons) must reflect the actual, kernel-acknowledged state, not an optimistic local state.
+
+## 15. Command and API Contract
+
+### 15.1. Command classes
 
 - Runtime control: run mode, step, breakpoint operations.
 - IO control: force input, mask output.
 - Config lifecycle: load, save staged, validate, commit, restore.
 - Admin control: reboot, diagnostics reset, session management.
 
-## 12.2 API behavior guarantees
+### 15.2. API behavior guarantees
 
 - Every mutating command returns structured success/error payload.
 - Validation errors return machine-readable codes and human message.
 - Snapshot API always returns the latest complete snapshot revision.
 - WebSocket event ordering must preserve revision sequence.
 
-## 12.3 Minimum response metadata
+### 15.3. Minimum response metadata
 
 - `requestId`
 - `timestamp`
@@ -440,9 +613,9 @@ If any step fails:
 - `errorCode` (on failure)
 - `snapshotRevision` (where relevant)
 
-## 13. Security and Authorization Contract
+## 16. Security and Authorization Contract
 
-## 13.1 Role model
+### 16.1. Role model
 
 Minimum roles:
 
@@ -451,7 +624,7 @@ Minimum roles:
 - `ENGINEER`
 - `ADMIN`
 
-## 13.2 Protected operations
+### 16.2. Protected operations
 
 Authentication and authorization required for:
 
@@ -461,7 +634,7 @@ Authentication and authorization required for:
 - schedule/RTC policy edits
 - firmware/OTA actions
 
-## 13.3 Audit requirements
+### 16.3. Audit requirements
 
 Audit record fields:
 
@@ -473,9 +646,9 @@ Audit record fields:
 - timestamp
 - result (`SUCCESS|FAILURE`)
 
-## 14. Fault Handling and Degraded Mode
+## 17. Fault Handling and Degraded Mode
 
-## 14.1 Fault classes
+### 17.1. Fault classes
 
 - validation fault
 - runtime math fault
@@ -485,7 +658,7 @@ Audit record fields:
 - scan overrun fault
 - watchdog fault
 
-## 14.2 Fault policies
+### 17.2. Fault policies
 
 Each fault class must have configurable severity:
 
@@ -499,7 +672,7 @@ Critical fault behavior:
 - unsafe outputs move to configured safe state,
 - fault latched until acknowledged or cleared by policy.
 
-## 15. Observability and Diagnostics
+## 18. Observability and Diagnostics
 
 Minimum metrics exposed:
 
@@ -516,21 +689,14 @@ Diagnostics persistence:
 
 - reboot reason and cumulative fault counters survive reboot.
 
-## 16. Performance and Resource Contract
+## 19. Performance and Resource Contract
 
 - Kernel path must avoid dynamic heap allocation per scan.
 - Snapshot generation must be bounded and non-blocking to kernel.
 - Portal/network load must not violate scan timing budget.
 - Memory and queue limits must be explicit and monitored.
 
-## 17. UI/Portal Contract (Protocol-level)
-
-- Portal presents cards in deterministic ID order.
-- UI never recomputes authoritative logical results.
-- Runtime controls reflect actual kernel-accepted state, not optimistic local state.
-- Config edits are staged until explicit commit.
-
-## 18. Acceptance Test Contract
+## 20. Acceptance Test Contract
 
 Each requirement in this document must map to at least one acceptance test ID.
 
@@ -549,19 +715,19 @@ Release gate:
 
 - No release candidate is accepted unless all mapped acceptance tests pass in CI and HIL smoke suite.
 
-## 19. Backward Compatibility Policy
+## 21. Backward Compatibility Policy
 
 - DI/AI/SIO/DO behavior is default-compatible unless explicitly version-gated in schema.
 - New features are schema/config gated and must not alter legacy behavior unless explicitly configured.
 - Migration must preserve equivalent behavior for legacy configs.
 
-## 20. Change Control
+## 22. Change Control
 
 - Contract changes require version bump and change log entry.
 - Breaking behavior changes require major version increment.
 - Any ambiguity discovered during implementation must be resolved by editing this contract before coding continues.
 
-## 21. Immediate Follow-up Artifacts
+## 23. Immediate Follow-up Artifacts
 
 Create and maintain:
 
