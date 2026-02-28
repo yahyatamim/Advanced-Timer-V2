@@ -3,6 +3,7 @@
 Date: 2026-02-26
 Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
 Related Tests: `docs/acceptance-matrix-v2.md`
+Related Hardware Profile: `docs/hardware-profile-v2.md`
 Status: Draft for implementation
 
 ## 1. Purpose
@@ -97,6 +98,12 @@ Base fields:
 - `label`: required string, non-empty.
 - `faultPolicy`: required enum: `INFO|WARN|CRITICAL`.
 - `config`: required typed object by `cardType`.
+
+Family presence/capacity:
+
+- `cards[]` may contain zero instances of any family.
+- Allowed families and max instances per family are controlled by active hardware profile.
+- Family max instances are compile-time capacities per build target (including virtual families and RTC schedule-alarm channels).
 
 ## 6. Condition Block Schema (`set`/`reset`)
 
@@ -332,6 +339,9 @@ Top-level `bindings` allows typed parameter binding.
 - V-CFG-016: reject `STATE` source type unless source card type is `DO` or `SIO` and source field is `missionState`.
 - V-CFG-017: reject `STATE` comparison values outside `IDLE|ACTIVE|FINISHED`.
 - V-CFG-018: reject `STATE` comparisons using operators other than `EQ`.
+- V-CFG-019: reject card types disabled by active build hardware profile gates.
+- V-CFG-020: reject card channel/index bindings outside active hardware profile channel arrays.
+- V-CFG-021: reject `RTC` card payload when active build profile does not support RTC.
 
 ## 10. Open Decisions To Freeze
 

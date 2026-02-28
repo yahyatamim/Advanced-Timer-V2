@@ -142,9 +142,28 @@ Supported run modes:
 - `RUN_STEP`: evaluate exactly one card evaluation step per user step command.
 - `RUN_BREAKPOINT`: halt at configured breakpoint boundary; continue on command.
 
+## 6.4 Build-Time Hardware Profile Contract
+
+Each firmware build target MUST define a hardware profile that gates available card families, IO channel capacity, and optional features.
+
+Minimum profile capabilities:
+
+- Explicit compile-time capacities for each family (`DI`, `DO`, `AI`, `SIO`, `MATH`, `RTC` alarm channels).
+- DI/DO/AI channel arrays (empty array means family unavailable in that build).
+- Feature gates for optional capabilities (for example RTC chip presence).
+- Backend selection for IO adapters (for example internal ADC vs external ADC).
+
+Rules:
+
+- If a family is disabled by profile, config validation MUST reject that card type.
+- `RTC` card support requires both hardware capability (`hasRtc`) and build gate enabled.
+- Kernel card logic MUST remain hardware-agnostic and consume adapter interfaces only.
+- Remote/protocol-specific IO (for example Modbus) is out of core scope and MUST be introduced only through installable plugin adapters.
+- The contract MUST NOT assume a single ESP32 variant; supported targets may include different ESP32 families and multi-chip controller combinations, represented only through platform adapters/profiles.
+
 ## 7. Card Families and Shared Contract
 
-## 7.1 Mandatory card families
+## 7.1 Profile-Optional card families
 
 - `DI` (Digital Input)
 - `AI` (Analog Input)
@@ -152,6 +171,14 @@ Supported run modes:
 - `DO` (Digital Output)
 - `MATH` (deterministic numeric compute)
 - `RTC` (time and schedule source)
+
+Rules:
+
+- Every family is optional per hardware profile.
+- A build may have zero cards of any family.
+- Family counts are fixed at compile time per build target.
+- Valid capacities are `0..N` for each family (`DI`, `DO`, `AI`, `SIO`, `MATH`, `RTC` alarm channels), where `N` is defined by hardware/profile design.
+- If a family capacity is `0` (or gate disabled), config validation MUST reject that family in payloads.
 
 Integrated behavior requirements:
 
@@ -432,6 +459,8 @@ The MATH card is a versatile, multi-purpose processing block for performing calc
 ## 8.6 RTC
 
 The RTC card is a logic component that acts as an independent, configurable scheduler. It evaluates a single time-based schedule against the global System Clock Service and produces a boolean output state, making it ideal for triggering time-based events.
+
+RTC is treated as schedule-based alarm functionality; available RTC card instances are bounded by compile-time RTC alarm channel capacity in the active hardware profile.
 
 ### 8.6.1 Config requirements
 
@@ -743,15 +772,31 @@ Release gate:
 - Breaking behavior changes require major version increment.
 - Any ambiguity discovered during implementation must be resolved by editing this contract before coding continues.
 - Behavior/API/validation decisions must be captured in `docs/decisions.md`.
+<<<<<<< HEAD
+=======
+
+## 23. Immediate Follow-up Artifacts
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1
 
 ## 23. Immediate Follow-up Artifacts
 
+<<<<<<< HEAD
 Create and maintain:
 
+- `docs/INDEX.md`
 - `docs/acceptance-matrix-v2.md`
 - `docs/schema-v2.md`
 - `docs/dependency-topology-rules.md`
+=======
+- `docs/acceptance-matrix-v2.md`
+- `docs/schema-v2.md`
+- `docs/dependency-topology-rules.md`
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1
 - `docs/timing-budget-v2.md`
 - `docs/fault-policy-v2.md`
 - `docs/api-contract-v2.md`
 - `docs/decisions.md`
+<<<<<<< HEAD
+- `docs/hardware-profile-v2.md`
+=======
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1

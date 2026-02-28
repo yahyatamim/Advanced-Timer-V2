@@ -5,10 +5,16 @@ Date: 2026-02-28
 Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
 Related: `docs/schema-v2.md`, `docs/acceptance-matrix-v2.md`, `docs/decisions.md`
 =======
+<<<<<<< HEAD
+Date: 2026-02-28
+Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
+Related: `docs/schema-v2.md`, `docs/acceptance-matrix-v2.md`, `docs/decisions.md`
+=======
 Date: 2026-02-26
 Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
 Related: `docs/schema-v2.md`, `docs/acceptance-matrix-v2.md`
 >>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1
 Status: Frozen for implementation
 
 ## 1. Scope
@@ -86,7 +92,12 @@ Rules:
 - `lastEvalUs` is card evaluation duration in microseconds (`uint32`, non-negative) for runtime observability and regression tracking.
 - `lastEvalUs` is runtime-only metadata and must not be required in config commit payloads.
 =======
+<<<<<<< HEAD
+- `lastEvalUs` is card evaluation duration in microseconds (`uint32`, non-negative) for runtime observability and regression tracking.
+- `lastEvalUs` is runtime-only metadata and must not be required in config commit payloads.
+=======
 >>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1
 
 ## 5.2 Command Request Envelope
 
@@ -353,5 +364,9 @@ Rules:
 <<<<<<< HEAD
 - `AT-CFG-006`: restore source constraints (`LKG|FACTORY`).
 =======
+<<<<<<< HEAD
+- `AT-CFG-006`: restore source constraints (`LKG|FACTORY`).
+=======
 - `AT-CFG-006`: restore source constraints (`LKG|FACTORY`).
 >>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1

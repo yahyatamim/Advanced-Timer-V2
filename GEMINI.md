@@ -22,7 +22,7 @@ The core purpose is to provide a "no-code" environment for defining complex cont
 
 ## Production Firmware Rewrite (V2)
 
-The project is undergoing a formal, phased rewrite to create a production-ready firmware. This effort is detailed in `firmware-rewrite-foundations.md`, `production-firmware-kickoff-plan.md`, and is specified in the new authoritative contract, **`requirements-v2-contract.md`**.
+The project is undergoing a formal, phased rewrite to create a production-ready firmware. This effort is detailed in `docs/legacy/firmware-rewrite-foundations.md`, `docs/legacy/production-firmware-kickoff-plan.md`, and is specified in the new authoritative contract, **`requirements-v2-contract.md`**.
 
 The key goals of the V2 rewrite are to improve reliability, testability, security, and architectural clarity.
 

@@ -63,6 +63,13 @@ Status: Draft for implementation kickoff
 | AT-RTC-003 | Sec 8.6.1, 8.6.3 | Field-based match with optional month/weekday omitted | Omitted fields act as wildcards; schedule triggers correctly | Yes | Yes | Yes |
 | AT-RTC-004 | Sec 8.6.1, 8.6.3 | Trigger duration timing | logicalState stays true for `triggerDuration` then deasserts | Yes | Yes | Yes |
 | AT-RTC-005 | Sec 8.6.3 | Attempt set/reset on RTC | RTC rejects/ignores set-reset as unsupported | Yes | No | Yes |
+| AT-HW-001 | Sec 6.4 | Build profile has empty DI channel array | DI card payloads rejected by validation | Yes | No | Yes |
+| AT-HW-002 | Sec 6.4 | Build profile has `hasRtc=false` or RTC gate disabled | RTC card payloads rejected by validation | Yes | No | Yes |
+| AT-HW-003 | Sec 6.4 | AI backend switched (`INTERNAL_ADC` vs `I2C_ADC`) | Card semantics unchanged; backend adapter only changes acquisition path | Yes | Yes | Yes |
+| AT-HW-004 | Sec 6.4 | Remote IO backend not enabled in core build | Core build excludes remote protocol dependency and remains deterministic | Yes | No | Yes |
+| AT-HW-005 | Sec 7.1, 6.4 | Family optionality across all types | Config with zero `AI|DI|DO|SIO|MATH|RTC` individually is accepted when profile disables/omits that family | Yes | No | Yes |
+| AT-HW-006 | Sec 6.4 | Capacity limits by profile arrays | Per-family instance counts above profile capacity are rejected | Yes | No | Yes |
+| AT-HW-007 | Sec 6.4, 8.6 | RTC schedule-alarm channel capacity | `RTC` instance count above compile-time alarm capacity is rejected; any `0..N` profile capacity behaves deterministically | Yes | No | Yes |
 | AT-BIND-001 | Sec 9.1-9.2 | CONSTANT and VARIABLE_REF source binding | Both bind modes accepted when type-compatible | Yes | No | Yes |
 | AT-BIND-002 | Sec 9.2 | Type mismatch in binding | Validation fails with structured error | Yes | No | Yes |
 | AT-BIND-003 | Sec 9.2 | Range/unit mismatch in numeric binding | Validation fails; active config unchanged | Yes | No | Yes |
@@ -109,8 +116,9 @@ These tests are defined as acceptance placeholders and should be finalized when 
 ## 4. Coverage Check
 
 - Required suite prefixes from contract are present: `AT-CORE`, `AT-DI/AI/SIO/DO`, `AT-MATH`, `AT-RTC`, `AT-BIND`, `AT-CFG`, `AT-SEC`, `AT-REL`.
-<<<<<<< HEAD
 - Every major contract section (4 through 20) has at least one mapped acceptance test.
+<<<<<<< HEAD
+=======
 =======
 <<<<<<< HEAD
 - Every major contract section (4 through 20) has at least one mapped acceptance test.
@@ -118,3 +126,4 @@ These tests are defined as acceptance placeholders and should be finalized when 
 - Every major contract section (4 through 20) has at least one mapped acceptance test.
 >>>>>>> 942d78b3b5ec7d4412087cf2f719218ac79c5519
 >>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1

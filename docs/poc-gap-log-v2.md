@@ -2,7 +2,7 @@
 
 Date: 2026-02-26
 Purpose: Trace PoC behavior/docs into V2 artifacts and classify gaps.
-Sources reviewed: `README.md`, `src/main.cpp`, `GEMINI.md`, `production-firmware-kickoff-plan.md`, `firmware-rewrite-foundations.md`.
+Sources reviewed: `README.md`, `src/main.cpp`, `GEMINI.md`, `docs/legacy/production-firmware-kickoff-plan.md`, `docs/legacy/firmware-rewrite-foundations.md`.
 
 ## 1. Summary
 

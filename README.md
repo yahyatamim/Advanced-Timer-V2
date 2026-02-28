@@ -9,6 +9,10 @@ Applies to: AdvancedTimer PoC firmware and portal integration baseline
 - `README.md` is frozen as the contract for the PoC codebase.
 - Production-hardened firmware work is V2 and is being built from scratch (not incremental patching of PoC behavior/comments).
 - Active source-of-truth for V2 planning/implementation:
+<<<<<<< HEAD
+  - `docs/INDEX.md`
+=======
+>>>>>>> 549b1e14679d699bc6e73313db0fe34b58c71af1
   - `requirements-v2-contract.md`
   - `docs/schema-v2.md`
   - `docs/api-contract-v2.md`
