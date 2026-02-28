@@ -742,6 +742,7 @@ Release gate:
 - Contract changes require version bump and change log entry.
 - Breaking behavior changes require major version increment.
 - Any ambiguity discovered during implementation must be resolved by editing this contract before coding continues.
+- Behavior/API/validation decisions must be captured in `docs/decisions.md`.
 
 ## 23. Immediate Follow-up Artifacts
 
@@ -753,3 +754,4 @@ Create and maintain:
 - `docs/timing-budget-v2.md`
 - `docs/fault-policy-v2.md`
 - `docs/api-contract-v2.md`
+- `docs/decisions.md`

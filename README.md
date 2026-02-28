@@ -1,8 +1,19 @@
 # Configuration Portal Implementation Contract
 
 Version: 1.1
-Status: Working Contract
-Applies to: AdvancedTimer Configuration Portal and runtime integration
+Status: Frozen PoC Contract (Legacy Baseline)
+Applies to: AdvancedTimer PoC firmware and portal integration baseline
+
+## Contract Scope Notice (February 28, 2026)
+
+- `README.md` is frozen as the contract for the PoC codebase.
+- Production-hardened firmware work is V2 and is being built from scratch (not incremental patching of PoC behavior/comments).
+- Active source-of-truth for V2 planning/implementation:
+  - `requirements-v2-contract.md`
+  - `docs/schema-v2.md`
+  - `docs/api-contract-v2.md`
+  - `docs/acceptance-matrix-v2.md`
+  - `docs/decisions.md`
 
 ## End-of-Day Update (February 25, 2026)
 
@@ -632,12 +643,15 @@ Status legend:
 
 ### 18.1 Master Source-of-Truth Rule
 
-`README.md` is the primary contract for portal + kernel integration behavior.
+`README.md` is the frozen primary contract for PoC portal + kernel integration behavior.
+
+For production-hardened V2 rewrite work, `requirements-v2-contract.md` and the `docs/*-v2.md` set are authoritative.
 
 Rules:
-- Any behavior change MUST be reflected here first (or in the same change set).
+- PoC behavior changes (if any) MUST be reflected here first (or in the same change set).
+- V2 rewrite behavior/API/schema changes MUST be reflected in V2 docs and decision log first.
 - Firmware comments in `main.cpp` are implementation notes, not primary authority.
-- If `main.cpp` comments and this file conflict, this file is authoritative until reconciled.
+- If `main.cpp` comments and this file conflict for PoC, this file is authoritative until reconciled.
 
 ### 18.2 Implementation Checklist (Execution Order)
 
@@ -661,7 +675,8 @@ Migration tasks:
 For each implementation PR/change set:
 1. Update relevant checklist item status.
 2. Reference touched section numbers from this contract in commit/PR notes.
-3. If scope changed, update this tasklist before implementation continues.
+3. Add/update decision entries in `docs/decisions.md` for behavior/API/validation changes and reference decision IDs in commit/PR notes.
+4. If scope changed, update this tasklist before implementation continues.
 
 ## 19. Kernel Architecture Contract (Migrated from `src/main.cpp`)
 

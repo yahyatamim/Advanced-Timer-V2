@@ -1,8 +1,14 @@
 # API Contract V2
 
+<<<<<<< HEAD
+Date: 2026-02-28
+Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
+Related: `docs/schema-v2.md`, `docs/acceptance-matrix-v2.md`, `docs/decisions.md`
+=======
 Date: 2026-02-26
 Source Contract: `requirements-v2-contract.md` (v2.0.0-draft)
 Related: `docs/schema-v2.md`, `docs/acceptance-matrix-v2.md`
+>>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
 Status: Frozen for implementation
 
 ## 1. Scope
@@ -76,6 +82,11 @@ Message type: `runtime_snapshot`
 Rules:
 - `cards[]` order must match deterministic firmware evaluation order.
 - Snapshot values are authoritative; clients must not recompute logical outcomes.
+<<<<<<< HEAD
+- `lastEvalUs` is card evaluation duration in microseconds (`uint32`, non-negative) for runtime observability and regression tracking.
+- `lastEvalUs` is runtime-only metadata and must not be required in config commit payloads.
+=======
+>>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
 
 ## 5.2 Command Request Envelope
 
@@ -339,4 +350,8 @@ Rules:
 - `AT-API-003`: latest complete snapshot retrieval.
 - `AT-API-004`: WebSocket revision ordering.
 - `AT-API-005`: global output mask command behavior.
+<<<<<<< HEAD
 - `AT-CFG-006`: restore source constraints (`LKG|FACTORY`).
+=======
+- `AT-CFG-006`: restore source constraints (`LKG|FACTORY`).
+>>>>>>> f49a5102eca0203e62e2f8f14683426ceca22683
